@@ -11,9 +11,9 @@ Red Sync synchronises Obsidian vaults between your own devices through a small s
 On a machine with Docker, an HTTPS reverse proxy, and an R2 bucket with an API token limited to that bucket:
 
 ```sh
-git clone git@github.com:whyredfire/obsidian-redsync.git && cd obsidian-redsync/deploy
+git clone https://github.com/whyredfire/obsidian-redsync.git && cd obsidian-redsync/deploy
 cp .env.example .env    # the R2 details
-docker compose up -d --build
+docker compose up -d    # pulls ghcr.io/whyredfire/obsidian-redsync
 ```
 
 The server listens on 127.0.0.1:8080. Point your reverse proxy at it with HTTPS, and let it pass WebSocket upgrades (devices keep one open at `/v1/ws`). Litestream copies database changes to R2 every 10 seconds, and restores it on start when the disk is new.
@@ -57,4 +57,4 @@ bun run drill              # the server loses its database and is restored from 
 
 Watch the test devices at https://localhost:3001 and https://localhost:3002.
 
-Releases: run the 'release' workflow with a version such as `2.0.0`.
+Releases: run the 'release' workflow with a version such as `2.0.0`. It publishes the plug-in as a GitHub release and the server image to `ghcr.io/whyredfire/obsidian-redsync` (`2.0.0` and `latest`, for amd64 and arm64). The image is built before the plug-in is released, so a failed build stops the release.

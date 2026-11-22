@@ -13,22 +13,15 @@ permissions:
 concurrency: release
 
 jobs:
-  release:
+  test:
     runs-on: ubuntu-slim
-    permissions:
-      contents: write
     env:
       VERSION: ${{ inputs.version }}
     steps:
+      - run: '[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version must look like 2.0.0"; exit 1; }'
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 26
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Set the version
-        run: node version-bump.mjs "$VERSION"
 
       - name: Test the server
         working-directory: server
@@ -41,7 +34,56 @@ jobs:
           bun run build
           bun run test
 
-      # Obsidian and BRAT install from the release whose tag equals the manifest version, so no "v" prefix
+  image:
+    needs: test
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      context: server
+      output: image
+      push: true
+      platforms: linux/amd64,linux/arm64
+      cache: true
+      cache-scope: redsync-server
+      sbom: true
+      set-meta-labels: true
+      set-meta-annotations: true
+      meta-images: ghcr.io/${{ github.repository }}
+      meta-tags: |
+        type=raw,value=${{ inputs.version }}
+        type=raw,value=latest
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    needs: image
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Set the version
+        run: node version-bump.mjs "$VERSION"
+
+      - name: Build the plug-in
+        working-directory: plugin
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Commit, tag, and release
         env:
           GH_TOKEN: ${{ github.token }}

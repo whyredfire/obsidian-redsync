@@ -1,7 +1,7 @@
 # Red Sync server: the server and Litestream (database backup to R2). Put your own HTTPS reverse proxy in front of
 # 127.0.0.1:8080; it must pass WebSocket upgrades (path /v1/ws).
 #   cp .env.example .env   # then fill it in
-#   docker compose up -d --build
+#   docker compose up -d
 # Administration: docker compose exec server redsync-server help
 
 x-r2: &r2
@@ -21,7 +21,7 @@ services:
       - ./litestream.yml:/etc/litestream.yml:ro
 
   server:
-    build: ../server
+    image: ${REDSYNC_IMAGE:-ghcr.io/whyredfire/obsidian-redsync}:${REDSYNC_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       restore:
