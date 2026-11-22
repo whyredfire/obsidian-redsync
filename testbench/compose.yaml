@@ -14,6 +14,11 @@ services:
     build: ../server
     environment:
       REDSYNC_LISTEN: 0.0.0.0:8080
+      REDSYNC_DATA: /data
+      # A folder stands in for R2 on the test bench.
+      REDSYNC_STORE: file:///data/r2
+    volumes:
+      - server:/data
     ports: ["127.0.0.1:8080:8080"]
 
   # Device A: vault on the container's case-sensitive file system.
@@ -34,5 +39,6 @@ services:
       - ../plugin/build:/config/vault/.obsidian/plugins/red-sync:ro
 
 volumes:
+  server: {}
   obsidian-a: {}
   obsidian-b: {}

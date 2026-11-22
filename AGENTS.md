@@ -24,6 +24,9 @@ cd plugin && bun install && bun run build   # plug-in into plugin/build/
 cd plugin && bun run test                   # plug-in unit tests
 cd server && cargo test                     # server tests; regenerates plugin/src/protocol/
 cd testbench && docker compose up -d --build && bun install && bun run smoke
+cd testbench && docker compose exec server redsync-server user add <name>   # prints an invite code
 ```
+
+The server is configured by environment variables: `REDSYNC_DATA` (data folder), `REDSYNC_STORE` (`s3://bucket/prefix` with the standard `AWS_*` variables, or `file:///path`), `REDSYNC_CACHE_MAX`, `REDSYNC_MAX_FILE`, `REDSYNC_SNAPSHOT_HOURS`, `REDSYNC_LISTEN`. Fixed limits are in `server/src/config.rs`.
 
 Device A: https://localhost:3001 (DevTools port 9223). Device B: https://localhost:3002 (DevTools port 9224). Server: http://localhost:8080.

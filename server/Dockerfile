@@ -6,6 +6,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked && cp target/release/redsync-server /redsync-server
 
 FROM gcr.io/distroless/cc-debian12
-COPY --from=build /redsync-server /redsync-server
+COPY --from=build /redsync-server /usr/local/bin/redsync-server
 EXPOSE 8080
-ENTRYPOINT ["/redsync-server"]
+ENTRYPOINT ["/usr/local/bin/redsync-server"]

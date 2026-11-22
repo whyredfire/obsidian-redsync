@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub const PROTOCOL_VERSION: u32 = 1;
+
 /// A message from a device over the WebSocket.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -98,4 +100,135 @@ pub enum CommitResult {
         meta: String,
     },
     MissingBlob,
+}
+
+// HTTP request and response bodies.
+
+/// POST /v1/vaults: creates a vault with an invite code from the server owner.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateVaultRequest {
+    pub invite: String,
+    pub name: String,
+    pub device_name: String,
+    pub encrypted: bool,
+    pub kdf_salt: Option<String>,
+    pub key_check: Option<String>,
+}
+
+/// POST /v1/vaults/{vault}/devices: joins with an enrolment code from a device of the vault.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct JoinRequest {
+    pub code: String,
+    pub device_name: String,
+}
+
+/// The answer to creating or joining a vault.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Joined {
+    pub vault: VaultInfo,
+    pub device_id: String,
+    pub token: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct VaultInfo {
+    pub id: String,
+    pub name: String,
+    pub epoch: String,
+    pub encrypted: bool,
+    pub kdf_salt: Option<String>,
+    pub key_check: Option<String>,
+    /// Storage used by all vaults of the owner, history included.
+    #[ts(type = "number")]
+    pub used_bytes: i64,
+    #[ts(type = "number")]
+    pub quota_bytes: i64,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Enrolment {
+    pub code: String,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DeviceInfo {
+    pub id: String,
+    pub name: String,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number | null")]
+    pub last_seen: Option<i64>,
+    pub this_device: bool,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenameDevice {
+    pub name: String,
+}
+
+/// The current state of one path.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FileEntry {
+    pub path_id: String,
+    #[ts(type = "number")]
+    pub version: i64,
+    #[ts(type = "number")]
+    pub seq: i64,
+    /// None for a deletion.
+    pub blob_id: Option<String>,
+    pub meta: String,
+}
+
+/// GET /v1/vaults/{vault}/files: every path, deletions included, as of `headSeq`.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Listing {
+    pub epoch: String,
+    #[ts(type = "number")]
+    pub head_seq: i64,
+    pub files: Vec<FileEntry>,
+}
+
+/// GET /v1/vaults/{vault}/versions?path=…: history of one path, newest first.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct VersionEntry {
+    #[ts(type = "number")]
+    pub version: i64,
+    #[ts(type = "number")]
+    pub seq: i64,
+    pub blob_id: Option<String>,
+    pub meta: String,
+    pub device_id: String,
+    #[ts(type = "number")]
+    pub created_at: i64,
+}
+
+/// The body of every HTTP error.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct ApiErrorBody {
+    /// Machine-readable: badRequest, unauthorized, invalidCode, notFound, tooLarge, quotaExceeded, internal.
+    pub error: String,
+    pub message: String,
 }
