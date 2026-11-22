@@ -8,4 +8,4 @@ export type ClientMessage = { "type": "hello", vault: string, token: string,
 /**
  * None on the first connection of a device.
  */
-epoch: string | null, since: number, protocol: number, } | { "type": "commit", req: string, ops: Array<CommitOp>, };
+epoch: string | null, since: number, protocol: number, } | { "type": "commit", req: string, ops: Array<CommitOp>, } | { "type": "ping" };

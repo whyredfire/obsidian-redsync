@@ -3,6 +3,9 @@ name: redsync-testbench
 x-obsidian: &obsidian
   build: ./obsidian
   shm_size: 1gb
+  # The devices reach the server only through "sync", so cutting that network takes a device offline
+  # while its DevTools port (on "default") stays reachable.
+  networks: [default, sync]
   environment:
     PUID: "1000"
     PGID: "1000"
@@ -19,6 +22,7 @@ services:
       REDSYNC_STORE: file:///data/r2
     volumes:
       - server:/data
+    networks: [sync]
     ports: ["127.0.0.1:8080:8080"]
 
   # Device A: vault on the container's case-sensitive file system.
@@ -37,6 +41,9 @@ services:
       - obsidian-b:/config
       - ./data/vault-b:/config/vault
       - ../plugin/build:/config/vault/.obsidian/plugins/red-sync:ro
+
+networks:
+  sync: {}
 
 volumes:
   server: {}

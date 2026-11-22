@@ -23,6 +23,8 @@ pub enum ClientMessage {
         req: String,
         ops: Vec<CommitOp>,
     },
+    /// Browsers cannot see WebSocket pings, so devices check the connection with this; answered by Pong.
+    Ping,
 }
 
 /// A message from the server over the WebSocket.
@@ -48,6 +50,7 @@ pub enum ServerMessage {
         req: String,
         results: Vec<CommitResult>,
     },
+    Pong,
 }
 
 /// One accepted change.

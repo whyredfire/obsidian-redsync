@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "smoke": "mkdir -p out && node scripts/smoke.ts"
+    "smoke": "mkdir -p out && node scripts/smoke.ts",
+    "sync": "node scripts/sync.ts"
   },
   "devDependencies": {
     "playwright-core": "^1.65.1"

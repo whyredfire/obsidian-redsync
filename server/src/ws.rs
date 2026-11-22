@@ -81,15 +81,18 @@ async fn session(state: AppState, socket: WebSocket) -> Result<()> {
     loop {
         tokio::select! {
             incoming = receiver.next() => match incoming {
-                Some(Ok(Message::Text(text))) => {
-                    let ClientMessage::Commit { req, ops } = serde_json::from_str(&text)? else { bail!("unexpected hello") };
-                    let (vault_id, device, request) = (vault.clone(), device_id.clone(), req.clone());
-                    let (results, changes) = state.db.call(move |c| sync::commit(c, &vault_id, &device, &request, &ops)).await?;
-                    for change in changes {
-                        state.publish(&vault, Event::Change(change));
+                Some(Ok(Message::Text(text))) => match serde_json::from_str(&text)? {
+                    ClientMessage::Commit { req, ops } => {
+                        let (vault_id, device, request) = (vault.clone(), device_id.clone(), req.clone());
+                        let (results, changes) = state.db.call(move |c| sync::commit(c, &vault_id, &device, &request, &ops)).await?;
+                        for change in changes {
+                            state.publish(&vault, Event::Change(change));
+                        }
+                        send(&mut sender, &ServerMessage::Result { req, results }).await?;
                     }
-                    send(&mut sender, &ServerMessage::Result { req, results }).await?;
-                }
+                    ClientMessage::Ping => send(&mut sender, &ServerMessage::Pong).await?,
+                    ClientMessage::Hello { .. } => bail!("hello sent twice"),
+                },
                 Some(Ok(Message::Close(_))) | None => return Ok(()),
                 Some(Ok(_)) => {}
                 Some(Err(error)) => return Err(error.into()),

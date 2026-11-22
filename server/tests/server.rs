@@ -250,6 +250,9 @@ async fn devices_see_each_others_changes_live_and_after_reconnecting() {
     assert!(laptop_saw.iter().any(|m| matches!(m, ServerMessage::Result { req, .. } if req == "r1")));
     assert!(laptop_saw.iter().any(|m| matches!(m, ServerMessage::Changes { up_to: 1, .. })), "its own change comes back too");
 
+    a.send(Message::Text(serde_json::to_string(&ClientMessage::Ping).unwrap().into())).await.unwrap();
+    assert_eq!(next(&mut a).await, Ok(ServerMessage::Pong));
+
     // Reconnecting from the start replays the log; another epoch means reconcile.
     let mut again = connect(&address, &phone, Some(&epoch), 0).await;
     next(&mut again).await.unwrap();
