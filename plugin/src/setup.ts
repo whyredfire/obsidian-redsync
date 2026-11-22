@@ -1,4 +1,4 @@
-import { type App, Modal, Notice, Platform, Setting } from "obsidian";
+import { type App, ButtonComponent, Modal, Notice, Platform, Setting, SettingGroup } from "obsidian";
 import qrcode from "qrcode-generator";
 import { call } from "./connection";
 import { encryptedCodec, newVaultKeys, WrongPassphrase } from "./crypto";
@@ -41,6 +41,28 @@ function passwordField(setting: Setting, onChange: (value: string) => void): Set
     });
 }
 
+/** Settings grouped under an optional heading, like Obsidian's own settings. */
+function group(containerEl: HTMLElement, heading?: string): SettingGroup {
+    const settings = new SettingGroup(containerEl);
+    if (heading) settings.setHeading(heading);
+    return settings;
+}
+
+/** Adds one setting to a group and returns it. */
+function add(settings: SettingGroup, name: string, desc?: string): Setting {
+    let added!: Setting;
+    settings.addSetting((setting) => {
+        added = setting.setName(name);
+        if (desc) setting.setDesc(desc);
+    });
+    return added;
+}
+
+/** Obsidian's standard row of dialogue buttons, at the bottom right. */
+function buttonBar(containerEl: HTMLElement): HTMLElement {
+    return containerEl.createDiv({ cls: "modal-button-container" });
+}
+
 /** Connects this vault: a new vault with an invite code, or an existing one with a setup link. */
 export class SetupModal extends Modal {
     private message!: HTMLElement;
@@ -67,94 +89,85 @@ export class SetupModal extends Modal {
 
     private showStart() {
         this.reset("Set up Red Sync");
-        new Setting(this.contentEl)
-            .setName("Start a new vault")
-            .setDesc("Upload this vault to your server, with the invite code from the server's owner.")
-            .addButton((button) => button.setButtonText("Start").setCta().onClick(() => this.showCreate()));
-        new Setting(this.contentEl)
-            .setName("Join a vault")
-            .setDesc("Download a vault that another of your devices already synchronises, with its setup link.")
-            .addButton((button) => button.setButtonText("Join").onClick(() => this.showJoin()));
+        const choices = group(this.contentEl);
+        add(choices, "Start a new vault", "Upload this vault to your server, with the invite code from the server's owner.").addButton((button) =>
+            button.setButtonText("Start").setCta().onClick(() => this.showCreate()),
+        );
+        add(choices, "Join a vault", "Download a vault that another of your devices already synchronises, with its setup link.").addButton(
+            (button) => button.setButtonText("Join").onClick(() => this.showJoin()),
+        );
     }
 
     private showCreate() {
         this.reset("Start a new vault");
         const form = { server: "", invite: "", name: this.app.vault.getName(), device: defaultDeviceName(), encrypt: true, passphrase: "", repeat: "" };
-        new Setting(this.contentEl).setName("Server address").addText((t) => t.setPlaceholder("https://sync.example.com").onChange((v) => (form.server = v)));
-        new Setting(this.contentEl).setName("Invite code").addText((t) => t.setPlaceholder("XXXX-XXXX-XXXX-XXXX").onChange((v) => (form.invite = v)));
-        new Setting(this.contentEl).setName("Vault name").addText((t) => t.setValue(form.name).onChange((v) => (form.name = v)));
-        new Setting(this.contentEl).setName("This device's name").addText((t) => t.setValue(form.device).onChange((v) => (form.device = v)));
-        const passphrase = passwordField(new Setting(this.contentEl).setName("Passphrase"), (v) => (form.passphrase = v)).setDesc(
-            "Every device needs it. Nobody, including the server's owner, can recover your notes from the server without it.",
+
+        const server = group(this.contentEl, "Server");
+        add(server, "Address").addText((t) => t.setPlaceholder("https://sync.example.com").onChange((v) => (form.server = v)));
+        add(server, "Invite code", "From the server's owner.").addText((t) => t.setPlaceholder("XXXX-XXXX-…").onChange((v) => (form.invite = v)));
+
+        const vault = group(this.contentEl, "This vault");
+        add(vault, "Vault name").addText((t) => t.setValue(form.name).onChange((v) => (form.name = v)));
+        add(vault, "This device's name").addText((t) => t.setValue(form.device).onChange((v) => (form.device = v)));
+
+        const encryption = group(this.contentEl, "Encryption");
+        const toggle = add(encryption, "End-to-end encryption", "The server stores only what it cannot read.");
+        const passphrase = passwordField(add(encryption, "Passphrase", "Every device needs it. Nobody can recover your notes without it."), (v) => (form.passphrase = v));
+        const repeat = passwordField(add(encryption, "Repeat the passphrase"), (v) => (form.repeat = v));
+        toggle.addToggle((t) =>
+            t.setValue(true).onChange((on) => {
+                form.encrypt = on;
+                passphrase.settingEl.toggle(on);
+                repeat.settingEl.toggle(on);
+            }),
         );
-        const repeat = passwordField(new Setting(this.contentEl).setName("Repeat the passphrase"), (v) => (form.repeat = v));
-        new Setting(this.contentEl)
-            .setName("End-to-end encryption")
-            .setDesc("Encrypt notes and file names on this device, so the server stores only what it cannot read.")
-            .addToggle((toggle) =>
-                toggle.setValue(true).onChange((on) => {
-                    form.encrypt = on;
-                    passphrase.settingEl.toggle(on);
-                    repeat.settingEl.toggle(on);
-                }),
-            );
-        // The toggle reads better above the passphrase fields it controls.
-        this.contentEl.insertBefore(this.contentEl.lastElementChild!, passphrase.settingEl);
+
         this.message = this.contentEl.createEl("p", { cls: "mod-warning" });
-        new Setting(this.contentEl).addButton((button) =>
-            button
-                .setButtonText("Create and upload")
-                .setCta()
-                .onClick(() =>
-                    this.busy(button.buttonEl, "Creating…", async () => {
-                        const server = checkServer(form.server);
-                        if (!form.invite.trim()) throw new Error("Enter the invite code.");
-                        if (form.encrypt && form.passphrase.length < 8) throw new Error("Use a passphrase of at least 8 characters.");
-                        if (form.encrypt && form.passphrase !== form.repeat) throw new Error("The passphrases do not match.");
-                        const keys = form.encrypt ? await newVaultKeys(form.passphrase) : { kdfSalt: null, keyCheck: null };
-                        const joined = await call<Joined>(server, "POST", "/vaults", {
-                            json: { invite: form.invite, name: form.name, deviceName: form.device, encrypted: form.encrypt, ...keys },
-                        });
-                        await this.finish(server, joined, form.device, form.encrypt ? form.passphrase : undefined);
-                    }),
-                ),
+        const create = new ButtonComponent(buttonBar(this.contentEl)).setButtonText("Create and upload").setCta();
+        create.onClick(() =>
+            this.busy(create.buttonEl, "Creating…", async () => {
+                const address = checkServer(form.server);
+                if (!form.invite.trim()) throw new Error("Enter the invite code.");
+                if (form.encrypt && form.passphrase.length < 8) throw new Error("Use a passphrase of at least 8 characters.");
+                if (form.encrypt && form.passphrase !== form.repeat) throw new Error("The passphrases do not match.");
+                const keys = form.encrypt ? await newVaultKeys(form.passphrase) : { kdfSalt: null, keyCheck: null };
+                const joined = await call<Joined>(address, "POST", "/vaults", {
+                    json: { invite: form.invite, name: form.name, deviceName: form.device, encrypted: form.encrypt, ...keys },
+                });
+                await this.finish(address, joined, form.device, form.encrypt ? form.passphrase : undefined);
+            }),
         );
     }
 
     private showJoin() {
         this.reset("Join a vault");
         const form = { link: this.link ? setupLink(this.link) : "", device: defaultDeviceName(), passphrase: "" };
+        const fields = group(this.contentEl);
         if (!this.link) {
-            new Setting(this.contentEl)
-                .setName("Setup link")
-                .setDesc("On a device that already synchronises, open Red Sync's settings and select 'Add a device'.")
-                .addText((t) => t.setPlaceholder("obsidian://red-sync?…").onChange((v) => (form.link = v)));
+            add(fields, "Setup link", "On a device that already synchronises: Red Sync's settings, 'Add a device'.").addText((t) =>
+                t.setPlaceholder("obsidian://red-sync?…").onChange((v) => (form.link = v)),
+            );
         }
-        new Setting(this.contentEl).setName("This device's name").addText((t) => t.setValue(form.device).onChange((v) => (form.device = v)));
-        passwordField(new Setting(this.contentEl).setName("Passphrase"), (v) => (form.passphrase = v)).setDesc(
-            "The vault's encryption passphrase. Leave it empty if the vault is not encrypted.",
-        );
+        add(fields, "This device's name").addText((t) => t.setValue(form.device).onChange((v) => (form.device = v)));
+        passwordField(add(fields, "Passphrase", "Leave it empty if the vault is not encrypted."), (v) => (form.passphrase = v));
+
         this.message = this.contentEl.createEl("p", { cls: "mod-warning" });
-        new Setting(this.contentEl).addButton((button) =>
-            button
-                .setButtonText("Join and download")
-                .setCta()
-                .onClick(() =>
-                    this.busy(button.buttonEl, "Joining…", async () => {
-                        if (!this.joined) {
-                            const link = parseSetupLink(form.link);
-                            if (!link) throw new Error("This is not a Red Sync setup link.");
-                            const server = checkServer(link.server);
-                            const joined = await call<Joined>(server, "POST", `/vaults/${link.vault}/devices`, {
-                                json: { code: link.code, deviceName: form.device },
-                            });
-                            this.joined = { server, joined };
-                        }
-                        const { server, joined } = this.joined;
-                        if (joined.vault.encrypted) await encryptedCodec(form.passphrase, joined.vault.kdfSalt!, joined.vault.keyCheck!);
-                        await this.finish(server, joined, form.device, joined.vault.encrypted ? form.passphrase : undefined);
-                    }),
-                ),
+        const join = new ButtonComponent(buttonBar(this.contentEl)).setButtonText("Join and download").setCta();
+        join.onClick(() =>
+            this.busy(join.buttonEl, "Joining…", async () => {
+                if (!this.joined) {
+                    const link = parseSetupLink(form.link);
+                    if (!link) throw new Error("This is not a Red Sync setup link.");
+                    const server = checkServer(link.server);
+                    const joined = await call<Joined>(server, "POST", `/vaults/${link.vault}/devices`, {
+                        json: { code: link.code, deviceName: form.device },
+                    });
+                    this.joined = { server, joined };
+                }
+                const { server, joined } = this.joined;
+                if (joined.vault.encrypted) await encryptedCodec(form.passphrase, joined.vault.kdfSalt!, joined.vault.keyCheck!);
+                await this.finish(server, joined, form.device, joined.vault.encrypted ? form.passphrase : undefined);
+            }),
         );
     }
 
@@ -213,12 +226,11 @@ export class AddDeviceModal extends Modal {
             qr.make();
             this.contentEl.createEl("img", { cls: "red-sync-qr", attr: { src: qr.createDataURL(5, 4), alt: "Setup QR code" } });
             this.contentEl.createEl("p", { cls: "red-sync-link", text: link });
-            new Setting(this.contentEl).addButton((button) =>
-                button.setButtonText("Copy link").onClick(async () => {
-                    await navigator.clipboard.writeText(link);
-                    button.setButtonText("Copied");
-                }),
-            );
+            const copy = new ButtonComponent(buttonBar(this.contentEl)).setButtonText("Copy link").setCta();
+            copy.onClick(async () => {
+                await navigator.clipboard.writeText(link);
+                copy.setButtonText("Copied");
+            });
         } catch (error) {
             status.setText(`No setup link could be created: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -231,17 +243,12 @@ export class ConfirmModal extends Modal {
         super(app);
         this.setTitle(title);
         this.contentEl.createEl("p", { text });
-        new Setting(this.contentEl)
-            .addButton((button) => button.setButtonText("Cancel").onClick(() => this.close()))
-            .addButton((button) =>
-                button
-                    .setButtonText(action)
-                    .setWarning()
-                    .onClick(() => {
-                        this.close();
-                        onConfirm();
-                    }),
-            );
+        const buttons = buttonBar(this.contentEl);
+        new ButtonComponent(buttons).setButtonText(action).setWarning().onClick(() => {
+            this.close();
+            onConfirm();
+        });
+        new ButtonComponent(buttons).setButtonText("Cancel").onClick(() => this.close());
     }
 }
 
@@ -251,11 +258,10 @@ export class TextModal extends Modal {
         super(app);
         this.setTitle(title);
         this.contentEl.createEl("pre", { cls: "red-sync-text", text });
-        new Setting(this.contentEl).addButton((button) =>
-            button.setButtonText("Copy").onClick(async () => {
-                await navigator.clipboard.writeText(text);
-                button.setButtonText("Copied");
-            }),
-        );
+        const copy = new ButtonComponent(buttonBar(this.contentEl)).setButtonText("Copy");
+        copy.onClick(async () => {
+            await navigator.clipboard.writeText(text);
+            copy.setButtonText("Copied");
+        });
     }
 }
