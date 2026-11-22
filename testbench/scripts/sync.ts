@@ -46,7 +46,7 @@ async function setUpThroughDialogues() {
     const button = (page: Page, text: string) => page.locator(".modal button", { hasText: new RegExp(`^${text}$`) });
     await run(a, `app.commands.executeCommandById("red-sync:set-up");`);
     await button(a, "Start").click();
-    await field(a, "Server address").fill(SERVER_FROM_DEVICES);
+    await field(a, "Address").fill(SERVER_FROM_DEVICES);
     await field(a, "Invite code").fill(invite.toLowerCase());
     await field(a, "This device's name").fill("Device A");
     await field(a, "Passphrase").fill(PASSPHRASE);

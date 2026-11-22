@@ -237,15 +237,24 @@ export class SyncEngine {
         this.flush();
     }
 
-    /** Uploads the content of each path the server lacks, then commits them together. */
+    /**
+     * Commits the paths together; contents the server reports missing are uploaded and committed again. Asking
+     * first (HEAD) would save nothing, and Obsidian's HTTP client on Android fails on bodiless answers.
+     */
     private async uploadBatch(paths: string[]): Promise<void> {
         const prepared = (await inParallel(paths, PARALLEL_UPLOADS, (path) => this.prepare(path))).filter((p): p is Prepared => p !== null);
         if (prepared.length === 0) return;
         const results = await this.socket.commit(prepared.map((p) => p.op));
+        const missing = prepared.filter((_, i) => results[i].status === "missingBlob");
+        if (missing.length > 0) {
+            await inParallel(missing, PARALLEL_UPLOADS, async (p) => this.server.putBlob(p.blobId!, await this.codec.encodeBlob(p.local!.data)));
+            const retried = await this.socket.commit(missing.map((p) => p.op));
+            missing.forEach((p, i) => (results[prepared.indexOf(p)] = retried[i]));
+        }
         for (const [i, p] of prepared.entries()) await this.handleResult(p.path, p.baseBlob, p.local, p.blobId, results[i]);
     }
 
-    /** The commit for a changed path, with its content uploaded; null when the path matches the last sync. */
+    /** The commit for a changed path; null when the path matches the last sync. */
     private async prepare(path: string): Promise<Prepared | null> {
         const entry = this.state.get(path);
         const local = await this.readLocal(path);
@@ -256,7 +265,6 @@ export class SyncEngine {
                 if (entry.mtime !== local.mtime || entry.size !== local.size) await this.remember(path, entry.version, blobId);
                 return null;
             }
-            if (!(await this.server.hasBlob(blobId))) await this.server.putBlob(blobId, await this.codec.encodeBlob(local.data));
         } else if (!entry || entry.blobId === null) {
             return null;
         }

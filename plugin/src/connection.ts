@@ -62,11 +62,6 @@ function errorOf(status: number, response: { json: unknown }): ServerError {
 export class Server {
     constructor(private readonly account: Account) {}
 
-    async hasBlob(id: string): Promise<boolean> {
-        const response = await this.request("HEAD", `/blobs/${id}`, undefined, [404]);
-        return response.status === 200;
-    }
-
     async putBlob(id: string, data: ArrayBuffer): Promise<void> {
         await this.request("PUT", `/blobs/${id}`, data);
     }
@@ -79,7 +74,7 @@ export class Server {
         return (await this.request("GET", "/files")).json as Listing;
     }
 
-    private async request(method: string, path: string, body?: ArrayBuffer, allowed: number[] = []) {
+    private async request(method: string, path: string, body?: ArrayBuffer) {
         const response = await requestUrl({
             url: `${this.account.serverUrl.replace(/\/+$/, "")}/v1/vaults/${this.account.vaultId}${path}`,
             method,
@@ -88,7 +83,7 @@ export class Server {
             contentType: body ? "application/octet-stream" : undefined,
             throw: false,
         });
-        if (response.status >= 400 && !allowed.includes(response.status)) throw errorOf(response.status, response);
+        if (response.status >= 400) throw errorOf(response.status, response);
         return response;
     }
 }

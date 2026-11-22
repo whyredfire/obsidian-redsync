@@ -33,7 +33,27 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/vaults/{vault}/files", get(list_files))
         .route("/v1/vaults/{vault}/versions", get(file_versions))
         .route("/v1/ws", get(ws::upgrade))
+        .layer(axum::middleware::from_fn(log_request))
         .with_state(state)
+}
+
+/** One line per request: method, path (never the query or headers, which may hold tokens), status, time taken. */
+async fn log_request(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let (method, path) = (request.method().clone(), request.uri().path().to_owned());
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    let status = response.status();
+    let took = started.elapsed().as_millis();
+    if path == "/health" {
+        tracing::debug!("{method} {path} {} {took} ms", status.as_u16());
+    } else if status.is_server_error() {
+        tracing::error!("{method} {path} {} {took} ms", status.as_u16());
+    } else if status.is_client_error() {
+        tracing::warn!("{method} {path} {} {took} ms", status.as_u16());
+    } else {
+        tracing::info!("{method} {path} {} {took} ms", status.as_u16());
+    }
+    response
 }
 
 #[derive(Debug)]
@@ -278,7 +298,7 @@ async fn rename_device(
     auth: Auth,
     Path((vault, device)): Path<(String, String)>,
     Json(request): Json<RenameDevice>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     auth.check(&vault)?;
     check_name(&request.name)?;
     let updated = state
@@ -290,10 +310,10 @@ async fn rename_device(
             )
         })
         .await?;
-    if updated == 0 { Err(ApiError::NotFound) } else { Ok(StatusCode::NO_CONTENT) }
+    if updated == 0 { Err(ApiError::NotFound) } else { Ok(Json(json!({ "renamed": true }))) }
 }
 
-async fn revoke_device(State(state): State<AppState>, auth: Auth, Path((vault, device)): Path<(String, String)>) -> ApiResult<StatusCode> {
+async fn revoke_device(State(state): State<AppState>, auth: Auth, Path((vault, device)): Path<(String, String)>) -> ApiResult<Json<serde_json::Value>> {
     auth.check(&vault)?;
     let device_id = device.clone();
     let vault_id = vault.clone();
@@ -305,16 +325,22 @@ async fn revoke_device(State(state): State<AppState>, auth: Auth, Path((vault, d
         return Err(ApiError::NotFound);
     }
     state.publish(&vault, Event::Revoked(device));
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(json!({ "revoked": true })))
 }
 
-async fn put_blob(State(state): State<AppState>, auth: Auth, Path((vault, blob)): Path<(String, String)>, body: Body) -> ApiResult<StatusCode> {
+// Every answer has a body: Obsidian's HTTP client on Android fails on empty ones ("Stream closed").
+async fn put_blob(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path((vault, blob)): Path<(String, String)>,
+    body: Body,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     auth.check(&vault)?;
     if !valid_blob_id(&blob) {
         return Err(ApiError::BadRequest("Invalid blob ID."));
     }
     if blobs::exists(&state, &vault, &blob).await? {
-        return Ok(StatusCode::OK);
+        return Ok((StatusCode::OK, Json(json!({ "stored": true }))));
     }
     let size = blobs::receive(&state, &vault, &blob, body).await?;
     let (vault_id, blob_id) = (vault.clone(), blob.clone());
@@ -349,7 +375,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Path((vault, blob))
     }
     stored?;
     state.upload.notify_one();
-    Ok(StatusCode::CREATED)
+    Ok((StatusCode::CREATED, Json(json!({ "stored": true }))))
 }
 
 async fn head_blob(State(state): State<AppState>, auth: Auth, Path((vault, blob)): Path<(String, String)>) -> ApiResult<StatusCode> {

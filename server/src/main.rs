@@ -1,6 +1,7 @@
 use anyhow::Result;
 use redsync_server::{State, admin, config, db, export, router, snapshots, spawn_background};
 use tokio::net::TcpListener;
+use tracing_subscriber::EnvFilter;
 use tokio::signal::unix::{SignalKind, signal};
 
 #[tokio::main]
@@ -44,7 +45,11 @@ async fn run() -> Result<()> {
 }
 
 async fn serve(config: config::Config) -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        // Colours only on a terminal; docker logs and journald show the escape codes otherwise.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
+        .init();
     let store = config::store_from_env()?;
     let db = db::Db::open(&config.db_path())?;
     let state = State::new(config, db, store);

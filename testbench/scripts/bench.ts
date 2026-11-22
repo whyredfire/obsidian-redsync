@@ -76,6 +76,7 @@ export async function resetDevices(pages: Page[]): Promise<void> {
         await run(
             page,
             `
+            document.querySelectorAll(".modal-container").forEach((modal) => modal.remove());
             app.saveLocalStorage("red-sync-settings", null);
             await app.plugins.disablePlugin("red-sync");
             await app.plugins.enablePlugin("red-sync");

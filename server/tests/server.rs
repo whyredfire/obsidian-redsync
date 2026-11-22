@@ -263,7 +263,7 @@ async fn devices_see_each_others_changes_live_and_after_reconnecting() {
 
     // Revoking the phone closes its connections.
     let revoke = format!("/v1/vaults/{}/devices/{}", laptop.vault.id, phone.device_id);
-    assert_eq!(bench.call(Method::DELETE, &revoke, Some(&laptop.token), None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(bench.call(Method::DELETE, &revoke, Some(&laptop.token), None).await, (StatusCode::OK, json!({ "revoked": true })));
     assert_eq!(next(&mut b).await.unwrap_err(), 4003);
     let mut refused = connect(&address, &phone, None, 0).await;
     assert_eq!(next(&mut refused).await.unwrap_err(), 4001);

@@ -12,7 +12,7 @@ use rusqlite::params;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::db::now_ms;
-use crate::protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage};
+use crate::protocol::{ClientMessage, CommitResult, PROTOCOL_VERSION, ServerMessage};
 use crate::{AppState, Event, api, sync};
 
 const PAGE: i64 = 500;
@@ -49,13 +49,33 @@ async fn session(state: AppState, socket: WebSocket) -> Result<()> {
         bail!("expected hello");
     };
     if protocol != PROTOCOL_VERSION {
+        tracing::warn!("device refused: protocol {protocol}, this server speaks {PROTOCOL_VERSION}");
         return close(&mut sender, CLOSE_UNSUPPORTED, "unsupported protocol version").await;
     }
     let auth = match api::authenticate(&state, &token).await? {
         Some(auth) if auth.vault_id == vault => auth,
-        _ => return close(&mut sender, CLOSE_UNAUTHORIZED, "unauthorized").await,
+        _ => {
+            tracing::warn!("device refused for vault {vault}: unknown or revoked token");
+            return close(&mut sender, CLOSE_UNAUTHORIZED, "unauthorized").await;
+        }
     };
     let device_id = auth.device_id;
+    tracing::info!("device {device_id} connected to vault {vault} from seq {since}");
+    let result = connected(&state, sender, receiver, &vault, &device_id, epoch, since).await;
+    tracing::info!("device {device_id} disconnected{}", result.as_ref().err().map(|e| format!(": {e:#}")).unwrap_or_default());
+    result
+}
+
+async fn connected(
+    state: &AppState,
+    mut sender: Sender,
+    mut receiver: futures_util::stream::SplitStream<WebSocket>,
+    vault: &str,
+    device_id: &str,
+    epoch: Option<String>,
+    since: i64,
+) -> Result<()> {
+    let (vault, device_id) = (vault.to_owned(), device_id.to_owned());
 
     // Subscribe before reading the log, so no change falls between the two.
     let mut events = state.subscribe(&vault);
@@ -74,7 +94,7 @@ async fn session(state: AppState, socket: WebSocket) -> Result<()> {
     } else {
         since
     };
-    cursor = backfill(&state, &mut sender, &vault, cursor).await?;
+    cursor = backfill(state, &mut sender, &vault, cursor).await?;
 
     let mut ping = tokio::time::interval(Duration::from_secs(30));
     ping.tick().await;
@@ -84,7 +104,11 @@ async fn session(state: AppState, socket: WebSocket) -> Result<()> {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text)? {
                     ClientMessage::Commit { req, ops } => {
                         let (vault_id, device, request) = (vault.clone(), device_id.clone(), req.clone());
+                        let count = ops.len();
                         let (results, changes) = state.db.call(move |c| sync::commit(c, &vault_id, &device, &request, &ops)).await?;
+                        let conflicts = results.iter().filter(|r| matches!(r, CommitResult::Conflict { .. })).count();
+                        let missing = results.iter().filter(|r| matches!(r, CommitResult::MissingBlob)).count();
+                        tracing::info!("device {device_id}: {count} changes sent, {} accepted, {conflicts} conflicts, {missing} awaiting content", changes.len());
                         for change in changes {
                             state.publish(&vault, Event::Change(change));
                         }
@@ -103,10 +127,10 @@ async fn session(state: AppState, socket: WebSocket) -> Result<()> {
                     send(&mut sender, &ServerMessage::Changes { up_to: cursor, items: vec![change], more: false }).await?;
                 }
                 // A gap (or a missed message): read the log instead.
-                Ok(Event::Change(change)) if change.seq > cursor => cursor = backfill(&state, &mut sender, &vault, cursor).await?,
+                Ok(Event::Change(change)) if change.seq > cursor => cursor = backfill(state, &mut sender, &vault, cursor).await?,
                 Ok(Event::Revoked(id)) if id == device_id => return close(&mut sender, CLOSE_REVOKED, "revoked").await,
                 Ok(_) => {}
-                Err(RecvError::Lagged(_)) => cursor = backfill(&state, &mut sender, &vault, cursor).await?,
+                Err(RecvError::Lagged(_)) => cursor = backfill(state, &mut sender, &vault, cursor).await?,
                 Err(RecvError::Closed) => return Ok(()),
             },
             _ = ping.tick() => {
