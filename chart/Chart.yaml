@@ -1,0 +1,6 @@
+apiVersion: v2
+name: red-sync
+description: Red Sync server, which synchronises Obsidian vaults, with Litestream backing up its database to R2
+type: application
+version: 1.99.0
+appVersion: "1.99.0"

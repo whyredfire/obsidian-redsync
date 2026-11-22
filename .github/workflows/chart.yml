@@ -1,0 +1,33 @@
+name: chart
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - chart/**
+      - .github/workflows/chart.yml
+  pull_request:
+    paths:
+      - chart/**
+      - .github/workflows/chart.yml
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-slim
+    env:
+      # What every release has to set
+      VALUES: r2.endpoint=https://account.r2.cloudflarestorage.com,r2.existingSecret=red-sync-r2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
+      # The route and the policy are optional
+      - run: helm lint --strict chart --set "$VALUES"
+      - run: helm lint --strict chart --set "$VALUES,httpRoute.enabled=true,networkPolicy.enabled=true"
+      # Linting only warns about missing required values, so rendering checks them
+      - run: helm template chart --set "$VALUES" > /dev/null

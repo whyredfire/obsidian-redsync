@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
-// Set the release version in manifest.json, versions.json, and plugin/package.json.
+// Set the release version in manifest.json, versions.json, chart/Chart.yaml, and plugin/package.json.
 // Usage: node version-bump.mjs 2.0.0
 const version = process.argv[2];
 if (!/^\d+\.\d+\.\d+$/.test(version ?? "")) {
@@ -19,6 +19,12 @@ writeJson("manifest.json", manifest, 4);
 const versions = readJson("versions.json");
 versions[version] ??= manifest.minAppVersion;
 writeJson("versions.json", versions, 4);
+
+// The chart's version follows the release, and its appVersion picks the server image tag.
+const chart = readFileSync("chart/Chart.yaml", "utf8")
+    .replace(/^version: .*$/m, `version: ${version}`)
+    .replace(/^appVersion: .*$/m, `appVersion: "${version}"`);
+writeFileSync("chart/Chart.yaml", chart);
 
 const pkg = readJson("plugin/package.json");
 pkg.version = version;

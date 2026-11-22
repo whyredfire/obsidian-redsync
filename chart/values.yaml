@@ -1,0 +1,83 @@
+nameOverride: ""
+fullnameOverride: ""
+
+# Old ReplicaSets kept, for rollbacks
+revisionHistoryLimit: 3
+
+image:
+  repository: ghcr.io/whyredfire/obsidian-redsync
+  # Defaults to the chart's appVersion
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# A Cloudflare R2 bucket (or any S3 store) and a token limited to it
+r2:
+  endpoint: https://<account-id>.r2.cloudflarestorage.com
+  bucket: redsync
+  # auto for R2; other S3 stores check it, e.g. garage for Garage's default
+  region: auto
+  accessKeyId: ""
+  secretAccessKey: ""
+  # Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (the R2 token), used instead of the two values above
+  existingSecret: ""
+
+server:
+  # The cache of file contents on the volume; R2 holds everything
+  cacheMax: 2GB
+  maxFile: 200MB
+  snapshotHours: 6
+  logLevel: info
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: "1"
+      memory: 128Mi
+
+# Copies the database's changes to R2, and restores it on a new volume
+litestream:
+  image:
+    repository: litestream/litestream
+    tag: 0.5.18
+    pullPolicy: IfNotPresent
+  # How much server history a lost volume can cost
+  syncInterval: 10s
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+
+# The database and the cache; larger than server.cacheMax
+persistence:
+  size: 5Gi
+  storageClass: ""
+  # A claim to use instead of creating one
+  existingClaim: ""
+
+# Off by default; or route to the Service (port 8080) from your own Ingress
+httpRoute:
+  enabled: false
+  hostname: sync.example.com
+  annotations: {}
+  parentRefs:
+    - name: gateway
+      sectionName: https
+  # Gateway API filters, e.g. a longer timeout for the devices' WebSockets
+  filters: []
+
+# Limits pod traffic to what the chart needs; off by default because the
+# gateway selector depends on the cluster
+networkPolicy:
+  enabled: false
+  # NetworkPolicy peers allowed to reach the server
+  gateway:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateway
+  # NetworkPolicy peers running the S3 store, on the port of r2.endpoint; empty allows
+  # any destination, as R2 needs
+  r2: []

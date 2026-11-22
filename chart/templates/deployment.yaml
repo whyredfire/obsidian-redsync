@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "red-sync.fullname" . }}
+  labels:
+    {{- include "red-sync.labels" . | nindent 4 }}
+spec:
+  # SQLite has one writer and devices share one in-process hub: never more than one pod, not even during updates
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "red-sync.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "red-sync.labels" . | nindent 8 }}
+    spec:
+      securityContext:
+        {{- include "red-sync.podSecurityContext" . | nindent 8 }}
+      initContainers:
+        # On a new volume, brings the database back from R2; does nothing otherwise
+        - name: restore
+          image: {{ include "red-sync.image" (dict "image" .Values.litestream.image "context" $) }}
+          imagePullPolicy: {{ .Values.litestream.image.pullPolicy }}
+          args:
+            - restore
+            - -config
+            - /etc/litestream.yml
+            - -if-db-not-exists
+            - -if-replica-exists
+            - /data/redsync.db
+          envFrom:
+            {{- include "red-sync.envFrom" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.litestream.resources | nindent 12 }}
+          securityContext:
+            {{- include "red-sync.securityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/litestream.yml
+              subPath: litestream.yml
+            - name: tmp
+              mountPath: /tmp
+        # A native sidecar: starts before the server and stops after it, so the last changes still reach R2
+        - name: litestream
+          restartPolicy: Always
+          image: {{ include "red-sync.image" (dict "image" .Values.litestream.image "context" $) }}
+          imagePullPolicy: {{ .Values.litestream.image.pullPolicy }}
+          args:
+            - replicate
+            - -config
+            - /etc/litestream.yml
+          envFrom:
+            {{- include "red-sync.envFrom" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.litestream.resources | nindent 12 }}
+          securityContext:
+            {{- include "red-sync.securityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/litestream.yml
+              subPath: litestream.yml
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: server
+          image: {{ include "red-sync.image" (dict "image" .Values.image "context" $) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            {{- include "red-sync.envFrom" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          livenessProbe:
+            tcpSocket:
+              port: http
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          securityContext:
+            {{- include "red-sync.securityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "red-sync.pvcName" . }}
+        - name: config
+          configMap:
+            name: {{ include "red-sync.fullname" . }}-litestream
+        - name: tmp
+          emptyDir: {}

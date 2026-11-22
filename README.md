@@ -25,6 +25,18 @@ docker compose exec server redsync-server user add mum --quota 10GB
 docker compose exec server redsync-server help    # every command
 ```
 
+### On Kubernetes
+
+The chart in `chart/` runs the server with Litestream as a sidecar, on one pod with a volume (SQLite allows a single writer, so it never runs two):
+
+```sh
+kubectl create secret generic red-sync-r2 --from-literal=AWS_ACCESS_KEY_ID=… --from-literal=AWS_SECRET_ACCESS_KEY=…
+helm install red-sync ./chart --set r2.endpoint=https://<account-id>.r2.cloudflarestorage.com,r2.bucket=redsync,r2.existingSecret=red-sync-r2
+kubectl exec deploy/red-sync -c server -- redsync-server user add mum
+```
+
+Route HTTPS to the `red-sync` Service on port 8080 with your own Ingress, or set `httpRoute.enabled` for a Gateway API route. See `chart/values.yaml` for everything else.
+
 ## Setting up devices
 
 1. Install the plug-in with [BRAT](https://github.com/TfTHacker/obsidian42-brat): 'Add a beta plugin' with `whyredfire/obsidian-redsync`.
