@@ -8,15 +8,15 @@ Red Sync synchronises Obsidian vaults between your own devices through a small s
 
 ## Running the server
 
-On a VPS with Docker, a domain pointing at it, and an R2 bucket with an API token limited to that bucket:
+On a machine with Docker, an HTTPS reverse proxy, and an R2 bucket with an API token limited to that bucket:
 
 ```sh
 git clone git@github.com:whyredfire/obsidian-redsync.git && cd obsidian-redsync/deploy
-cp .env.example .env    # the domain and the R2 details
+cp .env.example .env    # the R2 details
 docker compose up -d --build
 ```
 
-Caddy obtains the HTTPS certificate. Litestream copies the database to R2 continuously, and restores it on start when the disk is new.
+The server listens on 127.0.0.1:8080. Point your reverse proxy at it with HTTPS, and let it pass WebSocket upgrades (devices keep one open at `/v1/ws`). Litestream copies database changes to R2 every 10 seconds, and restores it on start when the disk is new.
 
 Add people and give each their invite code:
 
