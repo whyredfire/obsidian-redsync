@@ -20,6 +20,8 @@ export interface DeviceSettings {
     keyCheck: string | null;
     paused?: boolean;
     silenced?: boolean;
+    /** 'Detailed log': record every change and upload. */
+    debug?: boolean;
 }
 
 const SETTINGS_KEY = "red-sync-settings";
@@ -179,6 +181,9 @@ export default class RedSyncPlugin extends Plugin {
         const state = await LocalState.open(`red-sync-${settings.vaultId}`);
         this.engine = new SyncEngine(this.app, account, state, codec, {
             log: (message) => this.log(message),
+            debug: (message) => {
+                if (this.deviceSettings?.debug) this.log(message);
+            },
             notice: (message) => this.notice(message),
             status: (status) => this.setStatus(status),
             revoked: () => {

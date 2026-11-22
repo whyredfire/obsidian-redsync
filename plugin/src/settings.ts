@@ -164,6 +164,11 @@ export class RedSyncSettingTab extends PluginSettingTab {
                             new Notice("Red Sync: checking every file.");
                         },
                     },
+                    {
+                        name: "Detailed log",
+                        desc: "Also record every change and upload in the log, to find out why something does not synchronise.",
+                        control: { type: "toggle", key: "debug" },
+                    },
                     { name: "Show log", action: () => new TextModal(this.app, "Red Sync log", plugin.logLines.join("\n") || "Nothing yet.").open() },
                     {
                         name: "Copy debug report",

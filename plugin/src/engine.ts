@@ -45,6 +45,8 @@ interface Remote {
 
 export interface EngineHooks {
     log(message: string): void;
+    /** Every change and upload; recorded only with 'Detailed log' on. */
+    debug(message: string): void;
     notice(message: string): void;
     status(status: Status): void;
     /** The server refused this device: revoked, or its owner removed. */
@@ -274,7 +276,7 @@ export class SyncEngine {
     }
 
     private async handleResult(path: string, baseBlob: string | null, local: Local | null, blobId: string | null, result: CommitResult) {
-        this.hooks.log(`Commit ${path} (${short(blobId)} on ${short(baseBlob)}): ${result.status}${"version" in result ? ` version ${result.version}` : ""}.`);
+        this.hooks.debug(`Commit ${path} (${short(blobId)} on ${short(baseBlob)}): ${result.status}${"version" in result ? ` version ${result.version}` : ""}.`);
         switch (result.status) {
             case "ok":
                 await this.remember(path, result.version, blobId);
@@ -325,7 +327,7 @@ export class SyncEngine {
         if (entry && change.version <= entry.version) return;
         const local = await this.readLocal(path);
         const localId = local ? await this.codec.blobId(local.data) : null;
-        this.hooks.log(`Change ${change.seq}: ${path} version ${change.version} (${short(change.blobId)}); here version ${entry?.version} (${short(entry?.blobId)}), file ${short(localId)}.`);
+        this.hooks.debug(`Change ${change.seq}: ${path} version ${change.version} (${short(change.blobId)}); here version ${entry?.version} (${short(entry?.blobId)}), file ${short(localId)}.`);
         if (localId === change.blobId) {
             await this.remember(path, change.version, change.blobId);
         } else if ((entry?.blobId ?? null) === localId) {
