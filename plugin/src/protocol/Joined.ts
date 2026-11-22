@@ -4,4 +4,8 @@ import type { VaultInfo } from "./VaultInfo";
 /**
  * The answer to creating or joining a vault.
  */
-export type Joined = { vault: VaultInfo, deviceId: string, token: string, };
+export type Joined = { vault: VaultInfo, deviceId: string, token: string, 
+/**
+ * What the inviting device left for the new one (the encrypted passphrase), handed over once.
+ */
+sealed: string | null, };

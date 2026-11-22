@@ -74,6 +74,23 @@ async function open(key: CryptoKey, data: ArrayBuffer | Uint8Array): Promise<Arr
     return crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(0, 12) }, key, bytes.slice(12));
 }
 
+/** For a setup link: a random one-time key, and `text` sealed with it (both base64url). */
+export async function sealForLink(text: string): Promise<{ key: string; sealed: string }> {
+    const raw = crypto.getRandomValues(new Uint8Array(32));
+    const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]);
+    return { key: toBase64Url(raw.buffer), sealed: toBase64Url(await seal(key, encoder.encode(text))) };
+}
+
+/** Opens what sealForLink sealed; throws when the key does not fit. */
+export async function openFromLink(key: string, sealed: string): Promise<string> {
+    const imported = await crypto.subtle.importKey("raw", fromBase64Url(key) as BufferSource, "AES-GCM", false, ["decrypt"]);
+    return decoder.decode(await open(imported, fromBase64Url(sealed)));
+}
+
+function fromBase64Url(text: string): Uint8Array {
+    return fromBase64(text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4));
+}
+
 function toBase64(data: ArrayBuffer | Uint8Array): string {
     let binary = "";
     for (const byte of new Uint8Array(data)) binary += String.fromCharCode(byte);

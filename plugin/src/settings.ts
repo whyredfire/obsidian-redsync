@@ -126,20 +126,8 @@ export class RedSyncSettingTab extends PluginSettingTab {
                     {
                         name: "End-to-end encryption",
                         desc: settings.encrypted
-                            ? "On. The server stores only what it cannot read."
+                            ? "On. The server stores only what it cannot read. 'Add a device' passes the passphrase on to new devices."
                             : "Off. It was chosen when the vault was created; to encrypt, start a new vault.",
-                    },
-                    {
-                        name: "Passphrase",
-                        desc: "Every new device needs it.",
-                        visible: settings.encrypted,
-                        render: (setting) =>
-                            void setting
-                                .setName("Passphrase")
-                                .setDesc("Every new device needs it.")
-                                .addButton((button) =>
-                                    button.setButtonText("Show").onClick(() => new TextModal(this.app, "Passphrase", plugin.passphrase() ?? "").open()),
-                                ),
                     },
                 ],
             },

@@ -14,7 +14,7 @@ use tokio_util::io::ReaderStream;
 use crate::config::{ENROLMENT_TTL_MS, format_size};
 use crate::db::{code_hash, human_code, now_ms, random_id, random_token, sha256, valid_blob_id};
 use crate::protocol::{
-    ApiErrorBody, CreateVaultRequest, DeviceInfo, Enrolment, JoinRequest, Joined, Listing, RenameDevice, VaultInfo, VersionEntry,
+    ApiErrorBody, CreateEnrolment, CreateVaultRequest, DeviceInfo, Enrolment, JoinRequest, Joined, Listing, RenameDevice, VaultInfo, VersionEntry,
 };
 use crate::{AppState, Event, blobs, sync, ws};
 
@@ -176,7 +176,7 @@ fn add_device(tx: &Transaction, vault_id: &str, name: &str) -> rusqlite::Result<
         "INSERT INTO devices(id, vault_id, name, token_hash, created_at) VALUES(?1, ?2, ?3, ?4, ?5)",
         params![device_id, vault_id, name.trim(), sha256(token.as_bytes()), now_ms()],
     )?;
-    Ok(Joined { vault: vault_info(tx, vault_id)?, device_id, token })
+    Ok(Joined { vault: vault_info(tx, vault_id)?, device_id, token, sealed: None })
 }
 
 async fn create_vault(State(state): State<AppState>, Json(request): Json<CreateVaultRequest>) -> ApiResult<Json<Joined>> {
@@ -233,15 +233,33 @@ async fn get_vault_info(State(state): State<AppState>, auth: Auth, Path(vault): 
     Ok(Json(state.db.call(move |c| vault_info(c, &vault)).await?))
 }
 
-async fn create_enrolment(State(state): State<AppState>, auth: Auth, Path(vault): Path<String>) -> ApiResult<Json<Enrolment>> {
+async fn create_enrolment(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(vault): Path<String>,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<Enrolment>> {
     auth.check(&vault)?;
+    // An empty body is allowed: plug-in 0.1.0 sends none.
+    let request: CreateEnrolment = if body.is_empty() {
+        CreateEnrolment::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest("The body is not a valid enrolment request."))?
+    };
+    let sealed = request.sealed;
+    if sealed.as_ref().is_some_and(|s| s.len() > 4096) {
+        return Err(ApiError::BadRequest("sealed must be shorter than 4096 characters."));
+    }
     let code = human_code();
     let expires_at = now_ms() + ENROLMENT_TTL_MS;
     let hash = code_hash(&code);
     state
         .db
         .call(move |c| {
-            c.execute("INSERT INTO enrolments(code_hash, vault_id, expires_at) VALUES(?1, ?2, ?3)", params![hash, vault, expires_at])
+            c.execute(
+                "INSERT INTO enrolments(code_hash, vault_id, expires_at, sealed) VALUES(?1, ?2, ?3, ?4)",
+                params![hash, vault, expires_at, sealed],
+            )
         })
         .await?;
     Ok(Json(Enrolment { code, expires_at }))
@@ -254,16 +272,20 @@ async fn join_vault(State(state): State<AppState>, Path(vault): Path<String>, Js
         .db
         .call(move |c| -> ApiResult<Joined> {
             let tx = c.transaction()?;
-            let updated = tx.execute(
-                "UPDATE enrolments SET used = 1
-                 WHERE code_hash = ?1 AND vault_id = ?2 AND used = 0 AND expires_at > ?3
-                   AND vault_id IN (SELECT v.id FROM vaults v JOIN users u ON u.id = v.user_id WHERE u.removed_at IS NULL)",
-                params![hash, vault, now_ms()],
-            )?;
-            if updated == 0 {
-                return Err(ApiError::InvalidCode);
-            }
-            let joined = add_device(&tx, &vault, &request.device_name)?;
+            let sealed: Option<String> = tx
+                .query_row(
+                    "SELECT sealed FROM enrolments
+                     WHERE code_hash = ?1 AND vault_id = ?2 AND used = 0 AND expires_at > ?3
+                       AND vault_id IN (SELECT v.id FROM vaults v JOIN users u ON u.id = v.user_id WHERE u.removed_at IS NULL)",
+                    params![hash, vault, now_ms()],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .ok_or(ApiError::InvalidCode)?;
+            // Handed over once: forgotten as soon as it is used.
+            tx.execute("UPDATE enrolments SET used = 1, sealed = NULL WHERE code_hash = ?1", [&hash])?;
+            let mut joined = add_device(&tx, &vault, &request.device_name)?;
+            joined.sealed = sealed;
             tx.commit()?;
             Ok(joined)
         })

@@ -1,7 +1,7 @@
 import { type App, ButtonComponent, Modal, Notice, Platform, Setting, SettingGroup } from "obsidian";
 import qrcode from "qrcode-generator";
 import { call } from "./connection";
-import { encryptedCodec, newVaultKeys, WrongPassphrase } from "./crypto";
+import { encryptedCodec, newVaultKeys, openFromLink, sealForLink, WrongPassphrase } from "./crypto";
 import type RedSyncPlugin from "./main";
 import type { Enrolment } from "./protocol/Enrolment";
 import type { Joined } from "./protocol/Joined";
@@ -10,17 +10,19 @@ export interface SetupLink {
     server: string;
     vault: string;
     code: string;
+    /** Opens the passphrase the inviting device left on the server for this code. */
+    key?: string;
 }
 
-export function setupLink({ server, vault, code }: SetupLink): string {
-    return `obsidian://red-sync?${new URLSearchParams({ server, vault, code })}`;
+export function setupLink({ server, vault, code, key }: SetupLink): string {
+    return `obsidian://red-sync?${new URLSearchParams({ server, vault, code, ...(key ? { key } : {}) })}`;
 }
 
 export function parseSetupLink(text: string): SetupLink | null {
     try {
         const url = new URL(text.trim());
-        const [server, vault, code] = ["server", "vault", "code"].map((key) => url.searchParams.get(key));
-        return server && vault && code ? { server, vault, code } : null;
+        const [server, vault, code, key] = ["server", "vault", "code", "key"].map((name) => url.searchParams.get(name));
+        return server && vault && code ? { server, vault, code, ...(key ? { key } : {}) } : null;
     } catch {
         return null;
     }
@@ -139,6 +141,7 @@ export class SetupModal extends Modal {
         );
     }
 
+    /** From a setup link that was opened (scanned), this joins straight away; the form only appears when needed. */
     private showJoin() {
         this.reset("Join a vault");
         const form = { link: this.link ? setupLink(this.link) : "", device: defaultDeviceName(), passphrase: "" };
@@ -149,15 +152,17 @@ export class SetupModal extends Modal {
             );
         }
         add(fields, "This device's name").addText((t) => t.setValue(form.device).onChange((v) => (form.device = v)));
-        passwordField(add(fields, "Passphrase", "Leave it empty if the vault is not encrypted."), (v) => (form.passphrase = v));
+        // Only needed when the link carries no passphrase, or a link from before 0.1.1.
+        const passphrase = passwordField(add(fields, "Passphrase", "The vault's encryption passphrase."), (v) => (form.passphrase = v));
+        passphrase.settingEl.hide();
 
         this.message = this.contentEl.createEl("p", { cls: "mod-warning" });
         const join = new ButtonComponent(buttonBar(this.contentEl)).setButtonText("Join and download").setCta();
-        join.onClick(() =>
+        const run = () =>
             this.busy(join.buttonEl, "Joining…", async () => {
+                const link = parseSetupLink(form.link);
+                if (!link) throw new Error("This is not a Red Sync setup link.");
                 if (!this.joined) {
-                    const link = parseSetupLink(form.link);
-                    if (!link) throw new Error("This is not a Red Sync setup link.");
                     const server = checkServer(link.server);
                     const joined = await call<Joined>(server, "POST", `/vaults/${link.vault}/devices`, {
                         json: { code: link.code, deviceName: form.device },
@@ -165,10 +170,21 @@ export class SetupModal extends Modal {
                     this.joined = { server, joined };
                 }
                 const { server, joined } = this.joined;
-                if (joined.vault.encrypted) await encryptedCodec(form.passphrase, joined.vault.kdfSalt!, joined.vault.keyCheck!);
-                await this.finish(server, joined, form.device, joined.vault.encrypted ? form.passphrase : undefined);
-            }),
-        );
+                let secret: string | undefined;
+                if (joined.vault.encrypted) {
+                    secret = form.passphrase;
+                    if (!secret && link.key && joined.sealed) secret = await openFromLink(link.key, joined.sealed).catch(() => "");
+                    try {
+                        await encryptedCodec(secret ?? "", joined.vault.kdfSalt!, joined.vault.keyCheck!);
+                    } catch (error) {
+                        passphrase.settingEl.show();
+                        throw form.passphrase ? error : new Error("Enter the vault's passphrase.");
+                    }
+                }
+                await this.finish(server, joined, form.device, secret);
+            });
+        join.onClick(run);
+        if (this.link) void run();
     }
 
     private async finish(server: string, joined: Joined, deviceName: string, passphrase?: string) {
@@ -214,12 +230,16 @@ export class AddDeviceModal extends Modal {
         const settings = this.plugin.deviceSettings!;
         const status = this.contentEl.createEl("p", { text: "Creating a setup link…" });
         try {
+            // The passphrase travels sealed on the server; only this link can open it, once, within 15 minutes.
+            const handover = settings.encrypted ? await sealForLink(this.plugin.passphrase() ?? "") : undefined;
             const enrolment = await call<Enrolment>(settings.serverUrl, "POST", `/vaults/${settings.vaultId}/enrolments`, {
                 token: this.plugin.token() ?? undefined,
+                json: { sealed: handover?.sealed ?? null },
             });
-            const link = setupLink({ server: settings.serverUrl, vault: settings.vaultId, code: enrolment.code });
+            const link = setupLink({ server: settings.serverUrl, vault: settings.vaultId, code: enrolment.code, key: handover?.key });
             status.setText(
-                "On the new device, scan this code with the camera, or copy the link and paste it into Red Sync's setup. It works once, for 15 minutes.",
+                "Scan this code with the new device's camera, or open the link there; it sets Red Sync up by itself. It works once, within 15 minutes" +
+                    (settings.encrypted ? ", and passes on the passphrase, so keep it to yourself." : "."),
             );
             const qr = qrcode(0, "M");
             qr.addData(link);

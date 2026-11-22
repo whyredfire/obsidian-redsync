@@ -47,10 +47,7 @@ export default class RedSyncPlugin extends Plugin {
             },
         });
         // The QR code and setup link open obsidian://red-sync?server=…&vault=…&code=…
-        this.registerObsidianProtocolHandler("red-sync", (params) => {
-            const link = parseSetupLink(`obsidian://red-sync?${new URLSearchParams(params as Record<string, string>)}`);
-            if (link) this.openSetup(link);
-        });
+        this.registerObsidianProtocolHandler("red-sync", (params) => this.openLink(params));
         this.app.workspace.onLayoutReady(() => {
             // Registered after the vault has loaded, so start-up does not report every file as created.
             const changed = (file: Parameters<SyncEngine["onLocalChange"]>[0], oldPath?: string) =>
@@ -74,6 +71,13 @@ export default class RedSyncPlugin extends Plugin {
 
     onunload() {
         this.engine?.stop();
+    }
+
+    /** A scanned QR code or opened setup link: joins the vault straight away. */
+    openLink(params: Record<string, string>) {
+        const link = parseSetupLink(`obsidian://red-sync?${new URLSearchParams(params)}`);
+        if (link) this.openSetup(link);
+        else new Notice("Red Sync: this setup link is incomplete. Create a new one with 'Add a device'.");
     }
 
     private openSetup(link?: ReturnType<typeof parseSetupLink>) {

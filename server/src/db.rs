@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS devices(
   created_at INTEGER NOT NULL, last_seen INTEGER, revoked INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS enrolments(
-  code_hash BLOB PRIMARY KEY, vault_id TEXT NOT NULL, expires_at INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0
+  code_hash BLOB PRIMARY KEY, vault_id TEXT NOT NULL, expires_at INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0,
+  sealed TEXT
 );
 CREATE TABLE IF NOT EXISTS versions(
   vault_id TEXT NOT NULL, seq INTEGER NOT NULL, path_id TEXT NOT NULL, version INTEGER NOT NULL,
@@ -89,7 +90,18 @@ pub fn open(path: &Path) -> Result<Connection> {
     let connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch(SCHEMA)?;
+    migrate(&connection)?;
     Ok(connection)
+}
+
+/// Columns added after 0.1.0, for databases created before them.
+fn migrate(connection: &Connection) -> rusqlite::Result<()> {
+    let has_sealed: bool =
+        connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('enrolments') WHERE name = 'sealed')", [], |r| r.get(0))?;
+    if !has_sealed {
+        connection.execute_batch("ALTER TABLE enrolments ADD COLUMN sealed TEXT")?;
+    }
+    Ok(())
 }
 
 pub fn now_ms() -> i64 {

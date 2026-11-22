@@ -35,6 +35,7 @@ await resetDevices([a, b]);
 
 // A new user on the server; device A creates a vault, device B joins it.
 const invite = newInvite();
+let lastLink = "";
 if (ENCRYPTED) {
     await setUpThroughDialogues();
 } else {
@@ -59,18 +60,13 @@ async function setUpThroughDialogues() {
     await a.screenshot({ path: "out/m3-add-device.png" });
     await a.keyboard.press("Escape");
 
-    await run(b, `app.commands.executeCommandById("red-sync:set-up");`);
-    await button(b, "Join").click();
-    await field(b, "Setup link").fill(link);
-    await field(b, "This device's name").fill("Device B");
-    await field(b, "Passphrase").fill("not the passphrase");
-    await button(b, "Join and download").click();
-    const warning = b.locator(".modal .mod-warning", { hasText: "The passphrase is wrong." });
-    await warning.waitFor({ timeout: 10_000 });
-    console.log("PASS a wrong passphrase is refused, and the setup link still works");
-    await field(b, "Passphrase").fill(PASSPHRASE);
-    await button(b, "Join and download").click();
-    await b.locator(".modal").waitFor({ state: "detached", timeout: 10_000 });
+    // As if the QR code was scanned: nothing to type, the passphrase comes with the link.
+    await run(b, "plugin.openLink(Object.fromEntries(new URL(arg).searchParams));", link);
+    await b.locator(".modal").waitFor({ state: "detached", timeout: 15_000 });
+    const joinedB = (await run(b, "return plugin.deviceSettings?.encrypted === true && plugin.passphrase() === arg;", PASSPHRASE)) as boolean;
+    if (!joinedB) failures++;
+    console.log(`${joinedB ? "PASS" : "FAIL"} opening the setup link joins device B with the passphrase, nothing typed`);
+    lastLink = link;
 }
 await waitUntil("both devices connect", async () => (await synced(a)) && (await synced(b)), 10_000);
 
@@ -166,6 +162,24 @@ if (ENCRYPTED) {
     const reached = (await read(b, "after-revoke.md")) !== null;
     if (reached) failures++;
     console.log(`${reached ? "FAIL" : "PASS"} nothing reaches the revoked device`);
+
+    // A link without the passphrase (as from 0.1.0): B is asked for it, and a wrong one is refused.
+    await run(a, `app.commands.executeCommandById("red-sync:add-device");`);
+    const withKey = (await a.locator(".modal .red-sync-link").textContent())!;
+    await a.keyboard.press("Escape");
+    const noKey = new URL(withKey);
+    noKey.searchParams.delete("key");
+    await run(b, "plugin.openLink(Object.fromEntries(new URL(arg).searchParams));", noKey.toString());
+    const passphraseField = b.locator('.modal .setting-item:has(.setting-item-name:text-is("Passphrase")) input');
+    await passphraseField.waitFor({ timeout: 10_000 });
+    await passphraseField.fill("not the passphrase");
+    await b.locator(".modal button", { hasText: /^Join and download$/ }).click();
+    await b.locator(".modal .mod-warning", { hasText: "The passphrase is wrong." }).waitFor({ timeout: 10_000 });
+    await passphraseField.fill(PASSPHRASE);
+    await b.locator(".modal button", { hasText: /^Join and download$/ }).click();
+    await b.locator(".modal").waitFor({ state: "detached", timeout: 10_000 });
+    console.log("PASS without the key in the link, the passphrase is asked for and a wrong one refused");
+    void lastLink;
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

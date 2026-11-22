@@ -137,9 +137,18 @@ async fn invites_and_enrolments_are_single_use() {
     let (status, _) = bench.call(Method::POST, &format!("/v1/vaults/{vault}/devices"), None, Some(join)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
+    // What the inviting device seals for the new one is handed over once, then forgotten.
+    let body = json!({ "sealed": "opaque" });
+    let (_, enrolment) = bench.call(Method::POST, &format!("/v1/vaults/{vault}/enrolments"), Some(&owner.token), Some(body)).await;
+    let join = json!({ "code": enrolment["code"], "deviceName": "Phone" });
+    let (_, joined) = bench.call(Method::POST, &format!("/v1/vaults/{vault}/devices"), None, Some(join)).await;
+    assert_eq!(joined["sealed"], "opaque");
+    let left: Option<String> = bench.state.db.call(|c| c.query_row("SELECT MAX(sealed) FROM enrolments", [], |r| r.get(0))).await.unwrap();
+    assert_eq!(left, None);
+
     let (status, devices) = bench.call(Method::GET, &format!("/v1/vaults/{vault}/devices"), Some(&owner.token), None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(devices.as_array().unwrap().len(), 2);
+    assert_eq!(devices.as_array().unwrap().len(), 3);
     let (status, _) = bench.call(Method::GET, &format!("/v1/vaults/{vault}/devices"), None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

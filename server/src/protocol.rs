@@ -137,6 +137,17 @@ pub struct Joined {
     pub vault: VaultInfo,
     pub device_id: String,
     pub token: String,
+    /// What the inviting device left for the new one (the encrypted passphrase), handed over once.
+    pub sealed: Option<String>,
+}
+
+/// POST /v1/vaults/{vault}/enrolments
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateEnrolment {
+    /// Encrypted with a key that only the setup link holds; the server cannot read it.
+    pub sealed: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]

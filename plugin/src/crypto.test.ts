@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { encryptedCodec, newVaultKeys, WrongPassphrase } from "./crypto";
+import { encryptedCodec, newVaultKeys, openFromLink, sealForLink, WrongPassphrase } from "./crypto";
+
+describe("setup link sealing", () => {
+    it("opens with the link's key only", async () => {
+        const { key, sealed } = await sealForLink("correct horse");
+        expect(sealed).not.toContain("horse");
+        expect(await openFromLink(key, sealed)).toBe("correct horse");
+        const other = await sealForLink("x");
+        await expect(openFromLink(other.key, sealed)).rejects.toThrow();
+    });
+});
 
 describe("encrypted codec", async () => {
     const { kdfSalt, keyCheck } = await newVaultKeys("correct horse battery staple");
