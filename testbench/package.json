@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "smoke": "mkdir -p out && node scripts/smoke.ts",
-    "sync": "node scripts/sync.ts"
+    "sync": "node scripts/sync.ts",
+    "sync:encrypted": "node scripts/sync.ts --encrypted"
   },
   "devDependencies": {
     "playwright-core": "^1.65.1"

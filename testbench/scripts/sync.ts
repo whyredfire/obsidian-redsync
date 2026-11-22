@@ -1,10 +1,14 @@
-// M2 checks: two devices synchronise through the server. Run after `docker compose up -d --build` and a plug-in build.
+// Two devices synchronising through the server. Run after `docker compose up -d --build` and a plug-in build.
+// Without options the devices are connected through the API; with --encrypted they are set up through the
+// plug-in's own dialogues with end-to-end encryption, and the server is checked to hold nothing readable.
 import { execFileSync } from "node:child_process";
 import { chromium, type Page } from "playwright-core";
 
 const SERVER = "http://127.0.0.1:8080";
 const SERVER_FROM_DEVICES = "http://server:8080";
 const LIMIT_MS = 3000;
+const ENCRYPTED = process.argv.includes("--encrypted");
+const PASSPHRASE = "correct horse battery staple";
 let failures = 0;
 
 const compose = (...args: string[]) => execFileSync("docker", ["compose", ...args], { encoding: "utf8" });
@@ -77,15 +81,50 @@ for (const page of [a, b]) {
         for (const child of [...app.vault.getRoot().children]) await app.vault.delete(child, true);`);
 }
 
-// A new user and vault on the server; device A creates it, device B joins.
+// A new user on the server; device A creates a vault, device B joins it.
 const user = `bench${Date.now()}`;
 const invite = compose("exec", "server", "redsync-server", "user", "add", user).match(/[0-9A-Z]{4}(-[0-9A-Z]{4}){3}/)![0];
-const joinedA = await json("POST", "/v1/vaults", { invite, name: "Bench", deviceName: "Device A", encrypted: false });
-const vault = joinedA.vault.id;
-const { code } = await json("POST", `/v1/vaults/${vault}/enrolments`, undefined, joinedA.token);
-const joinedB = await json("POST", `/v1/vaults/${vault}/devices`, { code, deviceName: "Device B" });
-for (const [page, joined] of [[a, joinedA], [b, joinedB]] as const) {
-    await run(page, "await plugin.connect(...arg)", [SERVER_FROM_DEVICES, vault, joined.deviceId, joined.token]);
+if (ENCRYPTED) {
+    await setUpThroughDialogues();
+} else {
+    const joinedA = await json("POST", "/v1/vaults", { invite, name: "Bench", deviceName: "Device A", encrypted: false });
+    const vault = joinedA.vault.id;
+    const { code } = await json("POST", `/v1/vaults/${vault}/enrolments`, undefined, joinedA.token);
+    const joinedB = await json("POST", `/v1/vaults/${vault}/devices`, { code, deviceName: "Device B" });
+    await run(a, "await plugin.connect(...arg)", [SERVER_FROM_DEVICES, joinedA, "Device A"]);
+    await run(b, "await plugin.connect(...arg)", [SERVER_FROM_DEVICES, joinedB, "Device B"]);
+}
+
+async function setUpThroughDialogues() {
+    const field = (page: Page, name: string) => page.locator(`.modal .setting-item:has(.setting-item-name:text-is("${name}")) input`);
+    const button = (page: Page, text: string) => page.locator(".modal button", { hasText: new RegExp(`^${text}$`) });
+    await run(a, `app.commands.executeCommandById("red-sync:set-up");`);
+    await button(a, "Start").click();
+    await field(a, "Server address").fill(SERVER_FROM_DEVICES);
+    await field(a, "Invite code").fill(invite.toLowerCase());
+    await field(a, "This device's name").fill("Device A");
+    await field(a, "Passphrase").fill(PASSPHRASE);
+    await field(a, "Repeat the passphrase").fill(PASSPHRASE);
+    await button(a, "Create and upload").click();
+    await a.locator(".modal").waitFor({ state: "detached" });
+
+    await run(a, `app.commands.executeCommandById("red-sync:add-device");`);
+    const link = (await a.locator(".modal .red-sync-link").textContent())!;
+    await a.screenshot({ path: "out/m3-add-device.png" });
+    await a.keyboard.press("Escape");
+
+    await run(b, `app.commands.executeCommandById("red-sync:set-up");`);
+    await button(b, "Join").click();
+    await field(b, "Setup link").fill(link);
+    await field(b, "This device's name").fill("Device B");
+    await field(b, "Passphrase").fill("not the passphrase");
+    await button(b, "Join and download").click();
+    const warning = b.locator(".modal .mod-warning", { hasText: "The passphrase is wrong." });
+    await warning.waitFor({ timeout: 10_000 });
+    console.log("PASS a wrong passphrase is refused, and the setup link still works");
+    await field(b, "Passphrase").fill(PASSPHRASE);
+    await button(b, "Join and download").click();
+    await b.locator(".modal").waitFor({ state: "detached", timeout: 10_000 });
 }
 const synced = (page: Page) => run<boolean>(page, `return plugin.status.state === "synced";`);
 await waitUntil("both devices connect", async () => (await synced(a)) && (await synced(b)), 10_000);
@@ -146,6 +185,29 @@ await waitUntil(
     async () => (await read(b, "from-a-while-b-offline.md")) === "A" && (await read(a, "from-b-while-offline.md")) === "B",
     40_000,
 );
+
+if (ENCRYPTED) {
+    // What the server stores: no names, no content.
+    const settings = await run<{ vaultId: string }>(a, "return plugin.deviceSettings;");
+    const token = await run<string>(a, "return plugin.token();");
+    const listing = await json("GET", `/v1/vaults/${settings.vaultId}/files`, undefined, token);
+    const blob = await (await fetch(`${SERVER}/v1/vaults/${settings.vaultId}/blobs/${listing.files.find((f: any) => f.blobId).blobId}`, {
+        headers: { authorization: `Bearer ${token}` },
+    })).text();
+    const leaked = JSON.stringify(listing).match(/Live|\.md|Notes|Line|offline/) ?? blob.match(/Line|Hello|typed/);
+    if (leaked) failures++;
+    console.log(`${leaked ? "FAIL" : "PASS"} the server holds no file names, metadata, or content in readable form${leaked ? ` (found "${leaked[0]}")` : ""}`);
+
+    // Revoking B from A: B stops at once and receives nothing more.
+    const deviceB = await run<string>(b, "return plugin.deviceSettings.deviceId;");
+    await run(a, "await plugin.revokeDevice(arg);", deviceB);
+    await waitUntil("a revoked device stops and forgets the server", async () => (await run(b, "return plugin.deviceSettings;")) === null, LIMIT_MS);
+    await run(a, `await app.vault.create("after-revoke.md", "secret");`);
+    await sleep(3000);
+    const reached = (await read(b, "after-revoke.md")) !== null;
+    if (reached) failures++;
+    console.log(`${reached ? "FAIL" : "PASS"} nothing reaches the revoked device`);
+}
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

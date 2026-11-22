@@ -29,7 +29,36 @@ export class ServerError extends Error {
     }
 }
 
-/** The server's HTTP routes. Uses Obsidian's requestUrl, which is not subject to CORS. */
+/** One HTTP call to the server's API, with JSON in and out. Uses Obsidian's requestUrl, which is not subject to CORS. */
+export async function call<T>(serverUrl: string, method: string, path: string, options: { token?: string; json?: unknown } = {}): Promise<T> {
+    let response;
+    try {
+        response = await requestUrl({
+            url: `${serverUrl.replace(/\/+$/, "")}/v1${path}`,
+            method,
+            headers: options.token ? { Authorization: `Bearer ${options.token}` } : {},
+            body: options.json === undefined ? undefined : JSON.stringify(options.json),
+            contentType: "application/json",
+            throw: false,
+        });
+    } catch (error) {
+        throw new ServerError(0, "unreachable", `The server cannot be reached (${String(error)}).`);
+    }
+    if (response.status >= 400) throw errorOf(response.status, response);
+    return (response.text ? response.json : undefined) as T;
+}
+
+function errorOf(status: number, response: { json: unknown }): ServerError {
+    let body: ApiErrorBody | undefined;
+    try {
+        body = response.json as ApiErrorBody;
+    } catch {
+        // Not a JSON error body.
+    }
+    return new ServerError(status, body?.error ?? "http", body?.message ?? `HTTP ${status}`);
+}
+
+/** The vault's blob and listing routes for a connected device. */
 export class Server {
     constructor(private readonly account: Account) {}
 
@@ -59,15 +88,7 @@ export class Server {
             contentType: body ? "application/octet-stream" : undefined,
             throw: false,
         });
-        if (response.status >= 400 && !allowed.includes(response.status)) {
-            let error: ApiErrorBody | undefined;
-            try {
-                error = response.json as ApiErrorBody;
-            } catch {
-                // Not a JSON error body.
-            }
-            throw new ServerError(response.status, error?.error ?? "http", error?.message ?? `HTTP ${response.status}`);
-        }
+        if (response.status >= 400 && !allowed.includes(response.status)) throw errorOf(response.status, response);
         return response;
     }
 }

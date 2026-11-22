@@ -5,6 +5,7 @@ import { copyFile, mkdir } from "node:fs/promises";
 const production = process.argv[2] === "production";
 await mkdir("build", { recursive: true });
 await copyFile("manifest.json", "build/manifest.json");
+await copyFile("styles.css", "build/styles.css");
 
 const context = await esbuild.context({
     entryPoints: ["src/main.ts"],

@@ -34,6 +34,8 @@ export interface EngineHooks {
     log(message: string): void;
     notice(message: string): void;
     status(status: Status): void;
+    /** The server refused this device: revoked, or its owner removed. */
+    revoked(): void;
 }
 
 export class SyncEngine {
@@ -79,8 +81,7 @@ export class SyncEngine {
             },
             closed: (code) => {
                 if (code === 4001 || code === 4003) {
-                    this.hooks.notice("Red Sync: this device was disconnected from the server. Set up sync again to reconnect it.");
-                    this.hooks.status({ state: "stopped", reason: "This device was disconnected from the server." });
+                    this.hooks.revoked();
                 } else {
                     this.report();
                 }
@@ -99,6 +100,11 @@ export class SyncEngine {
         for (const { timer } of this.debounced.values()) window.clearTimeout(timer);
         this.debounced.clear();
         this.state.close();
+    }
+
+    /** Compares every file with the server, from the settings page. */
+    checkAll(): void {
+        this.enqueue(() => this.reconcile());
     }
 
     /** When the network returns or the app comes to the foreground: reconnect now instead of after the back-off. */
