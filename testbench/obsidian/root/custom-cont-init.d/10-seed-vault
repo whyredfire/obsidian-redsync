@@ -1,0 +1,9 @@
+#!/usr/bin/with-contenv bash
+# Open /config/vault directly instead of the vault picker, with Red Sync listed as a community plug-in.
+conf=/config/.config/obsidian/obsidian.json
+if [ ! -f "$conf" ]; then
+  mkdir -p /config/.config/obsidian /config/vault/.obsidian
+  echo '{"vaults":{"0123456789abcdef":{"path":"/config/vault","ts":1700000000000,"open":true}}}' > "$conf"
+  echo '["red-sync"]' > /config/vault/.obsidian/community-plugins.json
+  chown -R abc:abc /config/.config /config/vault
+fi

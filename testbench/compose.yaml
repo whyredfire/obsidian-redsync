@@ -1,0 +1,38 @@
+name: redsync-testbench
+
+x-obsidian: &obsidian
+  build: ./obsidian
+  shm_size: 1gb
+  environment:
+    PUID: "1000"
+    PGID: "1000"
+    TZ: Etc/UTC
+    RESTART_APP: "true"
+
+services:
+  server:
+    build: ../server
+    environment:
+      REDSYNC_LISTEN: 0.0.0.0:8080
+    ports: ["127.0.0.1:8080:8080"]
+
+  # Device A: vault on the container's case-sensitive file system.
+  obsidian-a:
+    <<: *obsidian
+    ports: ["127.0.0.1:3001:3001", "127.0.0.1:9223:9223"]
+    volumes:
+      - obsidian-a:/config
+      - ../plugin/build:/config/vault/.obsidian/plugins/red-sync:ro
+
+  # Device B: vault in a folder on the Mac, case-insensitive like macOS.
+  obsidian-b:
+    <<: *obsidian
+    ports: ["127.0.0.1:3002:3001", "127.0.0.1:9224:9223"]
+    volumes:
+      - obsidian-b:/config
+      - ./data/vault-b:/config/vault
+      - ../plugin/build:/config/vault/.obsidian/plugins/red-sync:ro
+
+volumes:
+  obsidian-a: {}
+  obsidian-b: {}

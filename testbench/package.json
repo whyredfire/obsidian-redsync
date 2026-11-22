@@ -1,0 +1,11 @@
+{
+  "name": "redsync-testbench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "mkdir -p out && node scripts/smoke.ts"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.1"
+  }
+}

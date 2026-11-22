@@ -1,0 +1,6 @@
+#!/bin/bash
+# The image's launcher, plus a DevTools port for the test scripts.
+if [ "${PIXELFLUX_WAYLAND,,}" == "true" ]; then
+  WAYLAND="--ozone-platform=wayland"
+fi
+/opt/obsidian/obsidian --no-sandbox ${WAYLAND} --remote-debugging-port=9222 "$@" > /dev/null 2>&1

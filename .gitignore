@@ -1,0 +1,6 @@
+node_modules/
+plugin/build/
+server/target/
+testbench/data/
+testbench/out/
+.env
