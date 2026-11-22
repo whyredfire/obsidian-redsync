@@ -1,5 +1,5 @@
 use anyhow::Result;
-use redsync_server::{State, admin, config, db, router, snapshots, spawn_background};
+use redsync_server::{State, admin, config, db, export, router, snapshots, spawn_background};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -19,6 +19,17 @@ async fn run() -> Result<()> {
         [] | ["serve"] => serve(config).await,
         ["restore"] => {
             println!("{}", snapshots::restore(&config, config::store_from_env()?.as_ref()).await?);
+            Ok(())
+        }
+        ["export", vault, folder] => {
+            let passphrase = std::env::var("REDSYNC_PASSPHRASE").ok();
+            let report = export::export(config::store_from_env()?.as_ref(), vault, std::path::Path::new(folder), passphrase.as_deref()).await?;
+            println!("{report}");
+            Ok(())
+        }
+        ["snapshot"] => {
+            let state = State::new(config.clone(), db::Db::open(&config.db_path())?, config::store_from_env()?);
+            println!("Snapshots written: {}", snapshots::run(&state).await?);
             Ok(())
         }
         ["help" | "--help" | "-h"] => {

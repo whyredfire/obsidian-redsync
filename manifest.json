@@ -1,0 +1,9 @@
+{
+    "id": "red-sync",
+    "name": "Red Sync",
+    "version": "1.99.0",
+    "minAppVersion": "1.13.0",
+    "description": "Synchronise your vault between your devices through your own server.",
+    "author": "whyredfire",
+    "isDesktopOnly": false
+}

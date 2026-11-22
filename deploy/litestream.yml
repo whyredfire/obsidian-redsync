@@ -1,0 +1,13 @@
+# The server's database, copied to R2 about every second. The blobs and snapshots are written by the server itself.
+dbs:
+  - path: /data/redsync.db
+    replica:
+      type: s3
+      bucket: ${R2_BUCKET}
+      path: litestream
+      endpoint: ${R2_ENDPOINT}
+      region: auto
+      access-key-id: ${R2_ACCESS_KEY_ID}
+      secret-access-key: ${R2_SECRET_ACCESS_KEY}
+      force-path-style: true
+      sync-interval: 1s

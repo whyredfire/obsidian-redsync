@@ -2,44 +2,13 @@
 // Without options the devices are connected through the API; with --encrypted they are set up through the
 // plug-in's own dialogues with end-to-end encryption, and the server is checked to hold nothing readable.
 import { execFileSync } from "node:child_process";
-import { chromium, type Page } from "playwright-core";
+import type { Page } from "playwright-core";
+import { compose, connectThroughApi, device, json, newInvite, read, resetDevices, run, SERVER, SERVER_FROM_DEVICES, sleep, synced } from "./bench.ts";
 
-const SERVER = "http://127.0.0.1:8080";
-const SERVER_FROM_DEVICES = "http://server:8080";
 const LIMIT_MS = 3000;
 const ENCRYPTED = process.argv.includes("--encrypted");
 const PASSPHRASE = "correct horse battery staple";
 let failures = 0;
-
-const compose = (...args: string[]) => execFileSync("docker", ["compose", ...args], { encoding: "utf8" });
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function device(port: number): Promise<Page> {
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-    const page = browser.contexts().flatMap((c) => c.pages()).find((p) => p.url().includes("index.html"));
-    if (!page) throw new Error(`no vault window on port ${port}`);
-    return page;
-}
-
-/** Runs `body` in Obsidian with `app` and the plug-in in scope. */
-function run<T>(page: Page, body: string, arg?: unknown): Promise<T> {
-    return page.evaluate(
-        ([body, arg]) => {
-            const app = (window as any).app;
-            const plugin = app.plugins.plugins["red-sync"];
-            return new Function("app", "plugin", "arg", `return (async () => { ${body} })()`)(app, plugin, arg);
-        },
-        [body, arg] as const,
-    );
-}
-
-/** What a device shows for `path`: the editor's text when open, else the file; null when missing. */
-const READ = `
-    const file = app.vault.getFileByPath(arg);
-    if (!file) return null;
-    for (const leaf of app.workspace.getLeavesOfType("markdown")) if (leaf.view.file?.path === arg) return leaf.view.editor.getValue();
-    return app.vault.read(file);`;
-const read = (page: Page, path: string) => run<string | null>(page, READ, path);
 
 async function waitUntil(what: string, check: () => Promise<boolean>, limitMs: number): Promise<number> {
     const start = Date.now();
@@ -58,41 +27,18 @@ async function waitUntil(what: string, check: () => Promise<boolean>, limitMs: n
     return -1;
 }
 
-async function json(method: string, path: string, body?: unknown, token?: string) {
-    const response = await fetch(SERVER + path, {
-        method,
-        headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-        body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`);
-    return response.json();
-}
-
 const a = await device(9223);
 const b = await device(9224);
 
 // Fresh start: load the new build, disconnect, and empty both vaults.
-for (const page of [a, b]) {
-    await run(page, `
-        app.saveLocalStorage("red-sync-settings", null);
-        await app.plugins.disablePlugin("red-sync");
-        await app.plugins.enablePlugin("red-sync");
-        app.workspace.getLeavesOfType("markdown").forEach((leaf) => leaf.detach());
-        for (const child of [...app.vault.getRoot().children]) await app.vault.delete(child, true);`);
-}
+await resetDevices([a, b]);
 
 // A new user on the server; device A creates a vault, device B joins it.
-const user = `bench${Date.now()}`;
-const invite = compose("exec", "server", "redsync-server", "user", "add", user).match(/[0-9A-Z]{4}(-[0-9A-Z]{4}){3}/)![0];
+const invite = newInvite();
 if (ENCRYPTED) {
     await setUpThroughDialogues();
 } else {
-    const joinedA = await json("POST", "/v1/vaults", { invite, name: "Bench", deviceName: "Device A", encrypted: false });
-    const vault = joinedA.vault.id;
-    const { code } = await json("POST", `/v1/vaults/${vault}/enrolments`, undefined, joinedA.token);
-    const joinedB = await json("POST", `/v1/vaults/${vault}/devices`, { code, deviceName: "Device B" });
-    await run(a, "await plugin.connect(...arg)", [SERVER_FROM_DEVICES, joinedA, "Device A"]);
-    await run(b, "await plugin.connect(...arg)", [SERVER_FROM_DEVICES, joinedB, "Device B"]);
+    await connectThroughApi(a, b);
 }
 
 async function setUpThroughDialogues() {
@@ -126,7 +72,6 @@ async function setUpThroughDialogues() {
     await button(b, "Join and download").click();
     await b.locator(".modal").waitFor({ state: "detached", timeout: 10_000 });
 }
-const synced = (page: Page) => run<boolean>(page, `return plugin.status.state === "synced";`);
 await waitUntil("both devices connect", async () => (await synced(a)) && (await synced(b)), 10_000);
 
 // Files.
@@ -185,6 +130,20 @@ await waitUntil(
     async () => (await read(b, "from-a-while-b-offline.md")) === "A" && (await read(a, "from-b-while-offline.md")) === "B",
     40_000,
 );
+
+// Many files at once, as on a first upload.
+await run(a, `await app.vault.createFolder("Bulk"); await Promise.all(Array.from({ length: 300 }, (_, i) => app.vault.create(\`Bulk/note \${i}.md\`, \`Note \${i}\`)));`);
+const bulk = `return app.vault.getFiles().filter((f) => f.path.startsWith("Bulk/")).length;`;
+await waitUntil("300 new files reach B", async () => (await run<number>(b, bulk)) === 300, 15_000);
+
+// Device B's vault is on a case-insensitive file system, like macOS: it must not let one overwrite the other.
+await run(a, `await app.vault.create("Case.md", "upper"); await app.vault.create("case.md", "lower");`);
+await sleep(LIMIT_MS);
+const onB = await run<string[]>(b, `return app.vault.getFiles().filter((f) => f.path.toLowerCase() === "case.md").map((f) => f.path);`);
+const keptOnA = (await read(a, "Case.md")) === "upper" && (await read(a, "case.md")) === "lower";
+const caseOk = keptOnA && onB.length === 1 && (await read(b, onB[0])) === (onB[0] === "Case.md" ? "upper" : "lower");
+if (!caseOk) failures++;
+console.log(`${caseOk ? "PASS" : "FAIL"} names differing only in case: A keeps both, B keeps one intact (B has ${JSON.stringify(onB)})`);
 
 if (ENCRYPTED) {
     // What the server stores: no names, no content.

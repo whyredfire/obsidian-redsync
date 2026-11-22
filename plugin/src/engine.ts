@@ -4,6 +4,7 @@ import type { Codec, Meta } from "./codec";
 import { type Account, Server, Socket } from "./connection";
 import { conflictedCopyPath, isText, merge3, toData, toText } from "./merge";
 import type { Change } from "./protocol/Change";
+import type { CommitOp } from "./protocol/CommitOp";
 import type { CommitResult } from "./protocol/CommitResult";
 import type { LocalState } from "./state";
 
@@ -11,6 +12,9 @@ import type { LocalState } from "./state";
 const IDLE_MS = 1000;
 /** …or after this long of continuous typing. */
 const MAX_DELAY_MS = 3000;
+/** Paths per commit, and uploads at once, so a first sync of thousands of files is not one round trip per file. */
+const BATCH = 50;
+const PARALLEL_UPLOADS = 6;
 
 export type Status =
     | { state: "synced" | "syncing" | "offline"; pending: number }
@@ -21,6 +25,15 @@ interface Local {
     /** The file on disk, which lags the editor while typing. */
     mtime: number;
     size: number;
+}
+
+/** A local change ready to commit. */
+interface Prepared {
+    path: string;
+    baseBlob: string | null;
+    local: Local | null;
+    blobId: string | null;
+    op: CommitOp;
 }
 
 /** The version a path should end up at, as told by the server. */
@@ -48,6 +61,15 @@ export class SyncEngine {
     /** Paths to upload when connected. */
     private waiting = new Set<string>();
     private epoch: string | null;
+    /** On macOS, Windows, and most phones, "Note.md" and "note.md" are the same file. */
+    private caseInsensitive = false;
+    private flushTimer?: number;
+    /** When each open note was last typed in. */
+    private lastTyped = new Map<string, number>();
+    /** Changes received and not yet applied. */
+    private incoming: Change[] = [];
+    /** Downloads started ahead of applying a batch of changes. */
+    private prefetched = new Map<string, Promise<ArrayBuffer>>();
 
     constructor(
         private readonly app: App,
@@ -62,6 +84,8 @@ export class SyncEngine {
             message: (message) => {
                 switch (message.type) {
                     case "welcome":
+                        // The server resends everything after the cursor: drop what an earlier connection left.
+                        this.incoming.length = 0;
                         if (this.state.cursor.epoch === null) {
                             this.enqueue(() => this.reconcile());
                         } else {
@@ -70,7 +94,9 @@ export class SyncEngine {
                         }
                         break;
                     case "changes":
-                        this.enqueue(() => this.applyChanges(message.items));
+                        // Changes arrive one message per commit; collect them so a burst is applied as one batch.
+                        if (this.incoming.length === 0) this.enqueue(() => this.applyChanges(this.incoming.splice(0)));
+                        this.incoming.push(...message.items);
                         break;
                     case "reset":
                         this.hooks.log("The server's history changed; comparing every file with it.");
@@ -90,7 +116,10 @@ export class SyncEngine {
     }
 
     start(): void {
-        this.enqueue(() => this.scan());
+        this.enqueue(async () => {
+            this.caseInsensitive = await this.detectCaseInsensitive();
+            await this.scan();
+        });
         this.socket.start();
         this.report();
     }
@@ -128,6 +157,7 @@ export class SyncEngine {
     }
 
     onEditorChange(path: string): void {
+        this.lastTyped.set(path, Date.now());
         this.touch(path);
     }
 
@@ -140,7 +170,7 @@ export class SyncEngine {
             () => {
                 this.debounced.delete(path);
                 this.waiting.add(path);
-                this.flush();
+                this.scheduleFlush();
             },
             Math.max(0, Math.min(IDLE_MS, first + MAX_DELAY_MS - now)),
         );
@@ -148,17 +178,27 @@ export class SyncEngine {
         this.report();
     }
 
+    /** Many timers fire together after a burst of changes; one flush shortly after collects them into batches. */
+    private scheduleFlush(): void {
+        if (this.flushTimer !== undefined) return;
+        this.flushTimer = window.setTimeout(() => {
+            this.flushTimer = undefined;
+            this.flush();
+        }, 50);
+    }
+
     /** Queues every waiting path, if connected. */
     private flush(): void {
         if (!this.socket.connected || this.state.cursor.epoch === null) return;
         const paths = [...this.waiting];
         this.waiting.clear();
-        for (const path of paths) {
+        for (let i = 0; i < paths.length; i += BATCH) {
+            const batch = paths.slice(i, i + BATCH);
             this.enqueue(async () => {
                 try {
-                    await this.upload(path);
+                    await this.uploadBatch(batch);
                 } catch (error) {
-                    this.waiting.add(path);
+                    for (const path of batch) this.waiting.add(path);
                     throw error;
                 }
             });
@@ -197,7 +237,16 @@ export class SyncEngine {
         this.flush();
     }
 
-    private async upload(path: string): Promise<void> {
+    /** Uploads the content of each path the server lacks, then commits them together. */
+    private async uploadBatch(paths: string[]): Promise<void> {
+        const prepared = (await inParallel(paths, PARALLEL_UPLOADS, (path) => this.prepare(path))).filter((p): p is Prepared => p !== null);
+        if (prepared.length === 0) return;
+        const results = await this.socket.commit(prepared.map((p) => p.op));
+        for (const [i, p] of prepared.entries()) await this.handleResult(p.path, p.baseBlob, p.local, p.blobId, results[i]);
+    }
+
+    /** The commit for a changed path, with its content uploaded; null when the path matches the last sync. */
+    private async prepare(path: string): Promise<Prepared | null> {
         const entry = this.state.get(path);
         const local = await this.readLocal(path);
         let blobId: string | null = null;
@@ -205,20 +254,19 @@ export class SyncEngine {
             blobId = await this.codec.blobId(local.data);
             if (entry?.blobId === blobId) {
                 if (entry.mtime !== local.mtime || entry.size !== local.size) await this.remember(path, entry.version, blobId);
-                return;
+                return null;
             }
             if (!(await this.server.hasBlob(blobId))) await this.server.putBlob(blobId, await this.codec.encodeBlob(local.data));
         } else if (!entry || entry.blobId === null) {
-            return;
+            return null;
         }
         const meta = await this.codec.encodeMeta({ path, mtime: local?.mtime ?? Date.now(), size: local?.data.byteLength ?? 0 });
-        const [result] = await this.socket.commit([
-            { pathId: await this.codec.pathId(path), baseVersion: entry?.version ?? 0, blobId, meta },
-        ]);
-        await this.handleResult(path, entry?.blobId ?? null, local, blobId, result);
+        const op = { pathId: await this.codec.pathId(path), baseVersion: entry?.version ?? 0, blobId, meta };
+        return { path, baseBlob: entry?.blobId ?? null, local, blobId, op };
     }
 
     private async handleResult(path: string, baseBlob: string | null, local: Local | null, blobId: string | null, result: CommitResult) {
+        this.hooks.log(`Commit ${path} (${short(blobId)} on ${short(baseBlob)}): ${result.status}${"version" in result ? ` version ${result.version}` : ""}.`);
         switch (result.status) {
             case "ok":
                 await this.remember(path, result.version, blobId);
@@ -235,18 +283,41 @@ export class SyncEngine {
     // Remote changes.
 
     private async applyChanges(changes: Change[]): Promise<void> {
-        for (const change of changes) {
-            if (change.seq <= this.state.cursor.seq) continue;
-            if (change.deviceId !== this.account.deviceId) await this.applyChange(change);
-            await this.state.setCursor({ epoch: this.epoch, seq: change.seq });
+        const todo = changes.filter((change) => change.seq > this.state.cursor.seq && change.deviceId !== this.account.deviceId);
+        // Start downloads ahead; most are needed, and a few extra are harmless.
+        void inParallel(todo, PARALLEL_UPLOADS, async (change) => {
+            if (change.blobId) await this.download(change.blobId).catch(() => undefined);
+        });
+        let applied = this.state.cursor.seq;
+        try {
+            for (const change of changes) {
+                if (change.seq <= applied) continue;
+                if (change.seq !== applied + 1) {
+                    // A change is missing (an earlier one failed): have the server send everything after the cursor again.
+                    this.socket.restart();
+                    return;
+                }
+                if (change.deviceId !== this.account.deviceId) await this.applyChange(change);
+                applied = change.seq;
+            }
+        } catch (error) {
+            this.socket.restart();
+            throw error;
+        } finally {
+            this.prefetched.clear();
+            // Saved once per batch: re-applying a change after a crash finds the file already up to date.
+            if (applied > this.state.cursor.seq) await this.state.setCursor({ epoch: this.epoch, seq: applied });
         }
     }
 
     private async applyChange(change: Change): Promise<void> {
         const path = await this.pathOf(change.meta);
         const entry = this.state.get(path);
+        // Already past this version (learnt from a conflict answer or the listing): replaying it would undo newer changes.
+        if (entry && change.version <= entry.version) return;
         const local = await this.readLocal(path);
         const localId = local ? await this.codec.blobId(local.data) : null;
+        this.hooks.log(`Change ${change.seq}: ${path} version ${change.version} (${short(change.blobId)}); here version ${entry?.version} (${short(entry?.blobId)}), file ${short(localId)}.`);
         if (localId === change.blobId) {
             await this.remember(path, change.version, change.blobId);
         } else if ((entry?.blobId ?? null) === localId) {
@@ -278,8 +349,35 @@ export class SyncEngine {
             if (merged !== toText(data)) this.waiting.add(path);
             return;
         }
+        if (!local && this.caseClash(path)) return;
         await this.writeLocal(path, data, meta.mtime);
         await this.remember(path, remote.version, remote.blobId);
+    }
+
+    /**
+     * Writing "note.md" where "Note.md" exists would overwrite it on a case-insensitive file system. This device
+     * then keeps only the first; the other stays on the server and on devices that can hold both.
+     */
+    private caseClash(path: string): boolean {
+        if (!this.caseInsensitive) return false;
+        const lower = path.toLowerCase();
+        const clash = this.app.vault.getFiles().find((file) => file.path !== path && file.path.toLowerCase() === lower);
+        if (!clash) return false;
+        this.hooks.notice(`Red Sync: ${path} and ${clash.path} differ only in capital letters, which this device cannot keep apart. Rename one of them on another device.`);
+        return true;
+    }
+
+    private async detectCaseInsensitive(): Promise<boolean> {
+        const adapter = this.app.vault.adapter;
+        const probe = `${this.app.vault.configDir}/red-sync-case-probe`;
+        try {
+            await adapter.write(probe, "");
+            return await adapter.exists(`${this.app.vault.configDir}/RED-SYNC-CASE-PROBE`, false);
+        } catch {
+            return false;
+        } finally {
+            await adapter.remove(probe).catch(() => undefined);
+        }
     }
 
     /**
@@ -337,6 +435,10 @@ export class SyncEngine {
             const localId = local ? await this.codec.blobId(local.data) : null;
             if (localId === file.blobId) {
                 await this.remember(path, file.version, file.blobId);
+            } else if (entry && entry.version > file.version) {
+                // The server went back in time (restored from a snapshot): this device has the newer version; upload it.
+                await this.remember(path, file.version, file.blobId);
+                this.waiting.add(path);
             } else if (!local && entry?.blobId && entry.blobId === file.blobId) {
                 // Deleted here while the server was behind.
                 await this.remember(path, file.version, entry.blobId);
@@ -369,8 +471,15 @@ export class SyncEngine {
         return normalizePath(decoded.path.normalize("NFC"));
     }
 
-    private async download(blobId: string): Promise<ArrayBuffer> {
-        return this.codec.decodeBlob(await this.server.getBlob(blobId));
+    private download(blobId: string): Promise<ArrayBuffer> {
+        let pending = this.prefetched.get(blobId);
+        if (!pending) {
+            pending = this.server.getBlob(blobId).then((data) => this.codec.decodeBlob(data));
+            this.prefetched.set(blobId, pending);
+            // Only kept while a batch of changes is applied.
+            if (this.prefetched.size > 1000) this.prefetched.clear();
+        }
+        return pending;
     }
 
     /**
@@ -378,7 +487,13 @@ export class SyncEngine {
      * on disk), with no await between reading and writing so no keystroke is lost. Null when they cannot be combined.
      */
     private async mergeText(path: string, base: string, theirs: string): Promise<string | null> {
-        const editor = this.editorFor(path);
+        let editor = this.editorFor(path);
+        if (editor) {
+            // Merging into a word being typed can split it; wait for a pause (but not forever).
+            const start = Date.now();
+            while (Date.now() - (this.lastTyped.get(path) ?? 0) < IDLE_MS && Date.now() - start < 5000) await sleep(100);
+            editor = this.editorFor(path);
+        }
         if (editor) {
             const merged = merge3(base, editor.getValue(), theirs);
             if (merged !== null) applyToEditor(editor, merged);
@@ -456,3 +571,21 @@ export function applyToEditor(editor: Editor, next: string): void {
     }
     editor.transaction({ changes });
 }
+
+/** Maps `items` through `work`, at most `limit` at a time, keeping their order. */
+async function inParallel<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    let next = 0;
+    const worker = async () => {
+        while (next < items.length) {
+            const i = next++;
+            results[i] = await work(items[i]);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const short = (id: string | null | undefined) => (id === undefined ? "none" : id === null ? "deleted" : id.slice(0, 8));

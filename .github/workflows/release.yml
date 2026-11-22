@@ -1,0 +1,55 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, e.g. 2.0.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Set the version
+        run: node version-bump.mjs "$VERSION"
+
+      - name: Test the server
+        working-directory: server
+        run: cargo test --locked
+
+      - name: Build and test the plug-in
+        working-directory: plugin
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          bun run test
+
+      # Obsidian and BRAT install from the release whose tag equals the manifest version, so no "v" prefix
+      - name: Commit, tag, and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "chore: Release ${VERSION}"
+          git tag "$VERSION"
+          git push origin HEAD "$VERSION"
+          gh release create "$VERSION" --title "$VERSION" --generate-notes plugin/build/main.js manifest.json plugin/build/styles.css

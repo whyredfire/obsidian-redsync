@@ -3,6 +3,7 @@ pub mod api;
 pub mod blobs;
 pub mod config;
 pub mod db;
+pub mod export;
 pub mod protocol;
 pub mod snapshots;
 pub mod sync;

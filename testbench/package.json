@@ -5,7 +5,9 @@
   "scripts": {
     "smoke": "mkdir -p out && node scripts/smoke.ts",
     "sync": "node scripts/sync.ts",
-    "sync:encrypted": "node scripts/sync.ts --encrypted"
+    "sync:encrypted": "node scripts/sync.ts --encrypted",
+    "fuzz": "node scripts/fuzz.ts",
+    "drill": "node scripts/drill.ts"
   },
   "devDependencies": {
     "playwright-core": "^1.65.1"

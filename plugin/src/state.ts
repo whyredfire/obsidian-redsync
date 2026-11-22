@@ -63,7 +63,8 @@ export class LocalState {
     }
 
     private write(store: string, action: (store: IDBObjectStore) => void): Promise<void> {
-        const tx = this.db.transaction(store, "readwrite");
+        // Relaxed: a write lost in a crash only means that file is compared with the server again.
+        const tx = this.db.transaction(store, "readwrite", { durability: "relaxed" });
         action(tx.objectStore(store));
         return new Promise((resolve, reject) => {
             tx.oncomplete = () => resolve();

@@ -14,7 +14,10 @@ pub const USAGE: &str = "Usage:
   redsync-server user quota <name> <size>      change a user's quota
   redsync-server user remove <name>            revoke all devices; data is deleted after 30 days
   redsync-server device revoke <device-id>     disconnect one device
-  redsync-server restore                       rebuild a missing database from the snapshots in R2";
+  redsync-server snapshot                      write a snapshot of every changed vault now
+  redsync-server restore                       rebuild a missing database from the snapshots in R2
+  redsync-server export <vault-id> <folder>    write a vault's newest snapshot as plain files, without a server
+                                               (REDSYNC_PASSPHRASE for an encrypted vault)";
 
 pub fn run(c: &Connection, args: &[&str]) -> Result<String> {
     match args {
