@@ -18,6 +18,12 @@ use crate::protocol::{
 };
 use crate::{AppState, Event, blobs, sync, ws};
 
+/** The release version the image was built for, or Cargo.toml's for local builds. */
+pub const VERSION: &str = match option_env!("REDSYNC_VERSION") {
+    Some(version) if !version.is_empty() => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -140,7 +146,7 @@ pub async fn authenticate(state: &AppState, token: &str) -> anyhow::Result<Optio
 }
 
 async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+    Json(json!({ "status": "ok", "version": VERSION }))
 }
 
 fn check_name(name: &str) -> ApiResult<()> {
