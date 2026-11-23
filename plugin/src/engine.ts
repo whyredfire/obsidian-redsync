@@ -1,17 +1,21 @@
-import { MarkdownView, normalizePath, type App, type Editor, type EditorChange, type TAbstractFile, TFile, TFolder } from "obsidian";
+import { MarkdownView, normalizePath, parseYaml, type App, type Editor, type EditorChange, type TAbstractFile, TFile, TFolder } from "obsidian";
 import DiffMatchPatch from "diff-match-patch";
 import type { Codec, Meta } from "./codec";
 import { type Account, Server, Socket } from "./connection";
-import { conflictedCopyPath, isText, merge3, toData, toText } from "./merge";
+import { conflictedCopyPath, isText, mergeFile, toData, toText } from "./merge";
 import type { Change } from "./protocol/Change";
 import type { CommitOp } from "./protocol/CommitOp";
 import type { CommitResult } from "./protocol/CommitResult";
+import type { FileEntry } from "./protocol/FileEntry";
 import type { LocalState } from "./state";
 
 /** A local change is uploaded once typing pauses this long… */
 const IDLE_MS = 1000;
 /** …or after this long of continuous typing. */
 const MAX_DELAY_MS = 3000;
+/** More files than this, and this share of the vault, gone at once is not passed on as deletions. */
+const MASS_DELETION_FILES = 20;
+const MASS_DELETION_SHARE = 0.25;
 /** Paths per commit, and uploads at once, so a first sync of thousands of files is not one round trip per file. */
 const BATCH = 50;
 const PARALLEL_UPLOADS = 6;
@@ -238,8 +242,13 @@ export class SyncEngine {
                 this.waiting.add(file.path);
             }
         }
-        for (const [path, entry] of this.state.files) {
-            if (entry.blobId !== null && !this.app.vault.getFileByPath(path)) this.waiting.add(path);
+        const missing = [...this.state.files].filter(([path, entry]) => entry.blobId !== null && !this.app.vault.getFileByPath(path));
+        if (this.massDeletion(missing.length)) {
+            this.hooks.notice(
+                `Red Sync: ${missing.length} synchronised files are missing from this vault, so they were not deleted on your other devices. To bring them back, select 'Check everything again' in Red Sync's settings.`,
+            );
+        } else {
+            for (const [path] of missing) this.waiting.add(path);
         }
         this.flush();
     }
@@ -442,6 +451,7 @@ export class SyncEngine {
     private async reconcile(): Promise<void> {
         const listing = await this.server.listing();
         const seen = new Set<string>();
+        const deletedHere: [string, FileEntry][] = [];
         for (const file of listing.files) {
             const path = await this.pathOf(file.meta);
             seen.add(path);
@@ -455,13 +465,21 @@ export class SyncEngine {
                 await this.remember(path, file.version, file.blobId);
                 this.waiting.add(path);
             } else if (!local && entry?.blobId && entry.blobId === file.blobId) {
-                // Deleted here while the server was behind.
-                await this.remember(path, file.version, entry.blobId);
-                this.waiting.add(path);
+                deletedHere.push([path, file]);
             } else if (!local || (entry !== undefined && entry.blobId === localId)) {
                 await this.takeRemote(path, file, local);
             } else {
                 await this.resolve(path, entry?.blobId ?? null, local, file);
+            }
+        }
+        if (this.massDeletion(deletedHere.length)) {
+            this.hooks.notice(`Red Sync: ${deletedHere.length} files missing from this vault were brought back from the server rather than deleted everywhere.`);
+            for (const [path, file] of deletedHere) await this.takeRemote(path, file, null);
+        } else {
+            // Deleted here since the last sync: pass the deletions on.
+            for (const [path, file] of deletedHere) {
+                await this.remember(path, file.version, file.blobId);
+                this.waiting.add(path);
             }
         }
         // What the server does not know: upload it as new.
@@ -510,7 +528,7 @@ export class SyncEngine {
             editor = this.editorFor(path);
         }
         if (editor) {
-            const merged = merge3(base, editor.getValue(), theirs);
+            const merged = mergeFile(path, base, editor.getValue(), theirs, parseYaml);
             if (merged !== null) applyToEditor(editor, merged);
             return merged;
         }
@@ -520,8 +538,15 @@ export class SyncEngine {
             return theirs;
         }
         let merged = null as string | null;
-        await this.app.vault.process(file, (current) => (merged = merge3(base, current, theirs)) ?? current);
+        await this.app.vault.process(file, (current) => (merged = mergeFile(path, base, current, theirs, parseYaml)) ?? current);
         return merged;
+    }
+
+    /** Many files gone at once is more likely a vault folder not (yet) all there than a choice: a device's deletions reach every device. */
+    private massDeletion(count: number): boolean {
+        let known = 0;
+        for (const entry of this.state.files.values()) if (entry.blobId !== null) known++;
+        return count > MASS_DELETION_FILES && count > known * MASS_DELETION_SHARE;
     }
 
     private async remember(path: string, version: number, blobId: string | null): Promise<void> {

@@ -132,6 +132,17 @@ await run(a, `await app.vault.createFolder("Bulk"); await Promise.all(Array.from
 const bulk = `return app.vault.getFiles().filter((f) => f.path.startsWith("Bulk/")).length;`;
 await waitUntil("300 new files reach B", async () => (await run<number>(b, bulk)) === 300, 15_000);
 
+// Hundreds of files missing at start-up (a vault folder not all there) are not deleted on the other devices.
+await run(b, "plugin.engine.stop(); plugin.engine = undefined;");
+await run(b, `for (const file of app.vault.getFiles().filter((f) => f.path.startsWith("Bulk/"))) await app.vault.delete(file);`);
+await run(b, "await plugin.startSync();");
+await sleep(LIMIT_MS);
+const bulkOnA = await run<number>(a, bulk);
+if (bulkOnA !== 300) failures++;
+console.log(`${bulkOnA === 300 ? "PASS" : "FAIL"} files missing in bulk at start-up stay on A (${bulkOnA} of 300)`);
+await run(b, "plugin.engine.checkAll();");
+await waitUntil("'Check everything again' brings them back on B", async () => (await run<number>(b, bulk)) === 300, 15_000);
+
 // Device B's vault is on a case-insensitive file system, like macOS: it must not let one overwrite the other.
 await run(a, `await app.vault.create("Case.md", "upper"); await app.vault.create("case.md", "lower");`);
 await sleep(LIMIT_MS);

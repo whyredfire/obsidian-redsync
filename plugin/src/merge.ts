@@ -7,14 +7,47 @@ export function isText(path: string): boolean {
 }
 
 /**
+ * merge3 for a file. Canvases, bases, and JSON merge only whole lines: merging inside a line can produce data that
+ * reads fine but means something else. A result that is broken where both sides were not (two edits to a note's
+ * properties can leave invalid YAML) is refused. `parseYaml` is Obsidian's; it throws on errors.
+ */
+export function mergeFile(path: string, base: string, mine: string, theirs: string, parseYaml: (text: string) => unknown): string | null {
+    const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+    const merged = merge3(base, mine, theirs, !STRUCTURED.has(extension));
+    if (merged === null) return null;
+    const valid = (text: string) => wellFormed(path, text, parseYaml);
+    return valid(merged) || !valid(mine) || !valid(theirs) ? merged : null;
+}
+
+const STRUCTURED = new Set(["canvas", "base", "json"]);
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n?^---[ \t]*(?:\r?\n|$)/m;
+
+function wellFormed(path: string, text: string, parseYaml: (text: string) => unknown): boolean {
+    const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+    try {
+        if (extension === "canvas" || extension === "json") JSON.parse(text);
+        else if (extension === "base") parseYaml(text);
+        else if (extension === "md" || extension === "markdown") {
+            if (!/^---\r?\n/.test(text)) return true;
+            const properties = FRONTMATTER.exec(text);
+            if (!properties || properties.index !== 0) return false;
+            parseYaml(properties[1]);
+        }
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Applies the changes from `base` to `theirs` onto `mine`; null when they cannot all be applied.
  * Whole lines first, so the other side's lines land between this side's lines and never inside one;
  * then, when both changed the same line (a paragraph is one line in Markdown), character by character.
  */
-export function merge3(base: string, mine: string, theirs: string): string | null {
+export function merge3(base: string, mine: string, theirs: string, characters = true): string | null {
     if (mine === theirs || base === theirs) return mine;
     if (base === mine) return theirs;
-    return mergeLines(base, mine, theirs) ?? mergeCharacters(base, mine, theirs);
+    return mergeLines(base, mine, theirs) ?? (characters ? mergeCharacters(base, mine, theirs) : null);
 }
 
 function mergeCharacters(base: string, mine: string, theirs: string): string | null {
