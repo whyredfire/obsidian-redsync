@@ -1,9 +1,10 @@
-import { apiVersion, Notice, Platform, Plugin } from "obsidian";
+import { apiVersion, Notice, Platform, Plugin, TFile } from "obsidian";
 import { type Codec, plainCodec } from "./codec";
 import { type Account, call } from "./connection";
 import { encryptedCodec } from "./crypto";
 import { type Status, SyncEngine } from "./engine";
 import type { Joined } from "./protocol/Joined";
+import { HistoryModal } from "./history";
 import { RedSyncSettingTab } from "./settings";
 import { AddDeviceModal, parseSetupLink, SetupModal } from "./setup";
 import { LocalState } from "./state";
@@ -48,6 +49,27 @@ export default class RedSyncPlugin extends Plugin {
                 return true;
             },
         });
+        this.addCommand({
+            id: "show-history",
+            name: "Show this file's history",
+            checkCallback: (checking) => {
+                const file = this.app.workspace.getActiveFile();
+                if (!file || !this.engine) return false;
+                if (!checking) new HistoryModal(this.app, this, file.path).open();
+                return true;
+            },
+        });
+        this.registerEvent(
+            this.app.workspace.on("file-menu", (menu, file) => {
+                if (!(file instanceof TFile) || !this.engine) return;
+                menu.addItem((item) =>
+                    item
+                        .setTitle("Red Sync history")
+                        .setIcon("history")
+                        .onClick(() => new HistoryModal(this.app, this, file.path).open()),
+                );
+            }),
+        );
         // The QR code and setup link open obsidian://red-sync?server=…&vault=…&code=…
         this.registerObsidianProtocolHandler("red-sync", (params) => this.openLink(params));
         this.app.workspace.onLayoutReady(() => {

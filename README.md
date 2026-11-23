@@ -43,7 +43,7 @@ Route HTTPS to the `red-sync` Service on port 8080 with your own Ingress, or set
 2. On the first device: Settings, Red Sync, 'Set up sync', 'Start a new vault'. Enter the server address and the invite code, and a passphrase for end-to-end encryption.
 3. On each further device: on a device already set up, select 'Add a device' and scan the QR code with the new device's camera (or open the link on it). The new device joins on its own; the passphrase travels inside the link, encrypted.
 
-Nothing else to configure: Red Sync uploads as you type, merges edits made on two devices at once, and keeps a conflicted copy when a merge is impossible.
+Nothing else to configure: Red Sync uploads as you type, merges edits made on two devices at once, and keeps a conflicted copy when a merge is impossible. To look at or restore an earlier version of a file from the last 30 days, run 'Show this file's history' or select 'Red Sync history' in the file's menu.
 
 ## Disclosures
 

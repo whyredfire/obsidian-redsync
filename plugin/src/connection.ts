@@ -5,6 +5,7 @@ import type { CommitOp } from "./protocol/CommitOp";
 import type { CommitResult } from "./protocol/CommitResult";
 import type { Listing } from "./protocol/Listing";
 import type { ServerMessage } from "./protocol/ServerMessage";
+import type { VersionEntry } from "./protocol/VersionEntry";
 import type { Cursor } from "./state";
 
 const PROTOCOL_VERSION = 1;
@@ -72,6 +73,10 @@ export class Server {
 
     async listing(): Promise<Listing> {
         return (await this.request("GET", "/files")).json as Listing;
+    }
+
+    async versions(pathId: string): Promise<VersionEntry[]> {
+        return (await this.request("GET", `/versions?path=${encodeURIComponent(pathId)}`)).json as VersionEntry[];
     }
 
     private async request(method: string, path: string, body?: ArrayBuffer) {

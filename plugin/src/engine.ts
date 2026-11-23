@@ -7,6 +7,7 @@ import type { Change } from "./protocol/Change";
 import type { CommitOp } from "./protocol/CommitOp";
 import type { CommitResult } from "./protocol/CommitResult";
 import type { FileEntry } from "./protocol/FileEntry";
+import type { VersionEntry } from "./protocol/VersionEntry";
 import type { LocalState } from "./state";
 
 /** A local change is uploaded once typing pauses this long… */
@@ -145,6 +146,21 @@ export class SyncEngine {
     /** When the network returns or the app comes to the foreground: check the connection now. */
     wake(): void {
         this.socket.wake();
+    }
+
+    /** This path's earlier versions on the server, newest first. */
+    async versions(path: string): Promise<VersionEntry[]> {
+        return this.server.versions(await this.codec.pathId(path));
+    }
+
+    /** One version's content, decrypted. */
+    async versionData(blobId: string): Promise<ArrayBuffer> {
+        return this.codec.decodeBlob(await this.server.getBlob(blobId));
+    }
+
+    /** Puts an earlier version back; like any edit, it is uploaded as the newest version. */
+    async restore(path: string, data: ArrayBuffer): Promise<void> {
+        await this.writeLocal(path, data);
     }
 
     // Local changes.

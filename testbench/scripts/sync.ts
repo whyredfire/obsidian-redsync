@@ -127,6 +127,21 @@ await waitUntil(
     40_000,
 );
 
+// History: an earlier version of a note, restored from A's history view, reaches B.
+await run(a, `await app.vault.create("History.md", "first");`);
+await waitUntil("a note for the history reaches B", async () => (await read(b, "History.md")) === "first", LIMIT_MS);
+await run(a, `await app.vault.modify(app.vault.getFileByPath("History.md"), "second");`);
+await waitUntil("its edit reaches B", async () => (await read(b, "History.md")) === "second", LIMIT_MS);
+await run(a, `await app.workspace.getLeaf(true).openFile(app.vault.getFileByPath("History.md")); app.commands.executeCommandById("red-sync:show-history");`);
+await a.locator(".modal .setting-item").nth(1).waitFor({ timeout: 10_000 });
+const rows = await a.locator(".modal .setting-item-description").allTextContents();
+const listed = rows.length === 2 && rows[0].startsWith("Current version, from this device") && rows[1].startsWith("Saved, from this device");
+if (!listed) failures++;
+console.log(`${listed ? "PASS" : "FAIL"} the history lists both versions (${JSON.stringify(rows)})`);
+await a.locator(".modal .setting-item").nth(1).locator("button", { hasText: /^Restore$/ }).click();
+await waitUntil("a restored version reaches B", async () => (await read(b, "History.md")) === "first", LIMIT_MS);
+await run(a, "app.workspace.getLeaf().detach();");
+
 // Many files at once, as on a first upload.
 await run(a, `await app.vault.createFolder("Bulk"); await Promise.all(Array.from({ length: 300 }, (_, i) => app.vault.create(\`Bulk/note \${i}.md\`, \`Note \${i}\`)));`);
 const bulk = `return app.vault.getFiles().filter((f) => f.path.startsWith("Bulk/")).length;`;
