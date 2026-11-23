@@ -79,7 +79,10 @@ export class RedSyncSettingTab extends PluginSettingTab {
                                                 "Disconnect this device?",
                                                 "This device stops synchronising and forgets the server and passphrase. The notes in this vault stay as they are.",
                                                 "Disconnect",
-                                                () => void plugin.disconnect().then(() => this.update()),
+                                                async () => {
+                                                    await plugin.disconnect();
+                                                    this.update();
+                                                },
                                             ).open(),
                                         ),
                                 ),
@@ -115,7 +118,10 @@ export class RedSyncSettingTab extends PluginSettingTab {
                         `Disconnect ${device.name}?`,
                         "It stops synchronising at once and needs a new setup link to join again. Its notes stay on it.",
                         "Disconnect",
-                        () => void plugin.revokeDevice(device.id).then(() => this.refresh(true)),
+                        async () => {
+                            await plugin.revokeDevice(device.id);
+                            await this.refresh(true);
+                        },
                     ).open();
                 },
             },

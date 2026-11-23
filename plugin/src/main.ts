@@ -203,7 +203,8 @@ export default class RedSyncPlugin extends Plugin {
         const line = `${new Date().toISOString()} ${message}`;
         this.logLines.push(line);
         if (this.logLines.length > LOG_LINES) this.logLines.shift();
-        console.debug(`[Red Sync] ${message}`);
+        // The console stays quiet unless 'Detailed log' is on.
+        if (this.deviceSettings?.debug) console.debug(`[Red Sync] ${message}`);
     }
 
     debugReport(): string {

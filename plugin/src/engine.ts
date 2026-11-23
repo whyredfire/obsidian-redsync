@@ -210,13 +210,18 @@ export class SyncEngine {
     private enqueue(task: () => Promise<void>): void {
         this.running++;
         this.report();
-        this.queue = this.queue
-            .then(task)
-            .catch((error: unknown) => this.hooks.log(`Synchronisation step failed: ${String(error)}`))
-            .finally(() => {
+        const previous = this.queue;
+        this.queue = (async () => {
+            await previous;
+            try {
+                await task();
+            } catch (error) {
+                this.hooks.log(`Synchronisation step failed: ${String(error)}`);
+            } finally {
                 this.running--;
                 this.report();
-            });
+            }
+        })();
     }
 
     private report(): void {
@@ -484,7 +489,7 @@ export class SyncEngine {
     private download(blobId: string): Promise<ArrayBuffer> {
         let pending = this.prefetched.get(blobId);
         if (!pending) {
-            pending = this.server.getBlob(blobId).then((data) => this.codec.decodeBlob(data));
+            pending = (async () => this.codec.decodeBlob(await this.server.getBlob(blobId)))();
             this.prefetched.set(blobId, pending);
             // Only kept while a batch of changes is applied.
             if (this.prefetched.size > 1000) this.prefetched.clear();

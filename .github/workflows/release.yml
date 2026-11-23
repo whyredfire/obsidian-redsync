@@ -80,6 +80,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
+      attestations: write
     env:
       VERSION: ${{ inputs.version }}
     steps:
@@ -97,6 +99,13 @@ jobs:
         run: |
           bun install --frozen-lockfile
           bun run build
+      - name: Attest the plug-in build
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            plugin/build/main.js
+            plugin/build/styles.css
+            manifest.json
 
       - uses: docker/login-action@v4
         with:

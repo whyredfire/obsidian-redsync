@@ -259,14 +259,14 @@ export class AddDeviceModal extends Modal {
 
 /** A question with a destructive answer. */
 export class ConfirmModal extends Modal {
-    constructor(app: App, title: string, text: string, action: string, onConfirm: () => void) {
+    constructor(app: App, title: string, text: string, action: string, onConfirm: () => unknown) {
         super(app);
         this.setTitle(title);
         this.contentEl.createEl("p", { text });
         const buttons = buttonBar(this.contentEl);
         new ButtonComponent(buttons).setButtonText(action).setWarning().onClick(() => {
             this.close();
-            onConfirm();
+            void onConfirm();
         });
         new ButtonComponent(buttons).setButtonText("Cancel").onClick(() => this.close());
     }
