@@ -3,4 +3,4 @@ name: red-sync
 description: Red Sync server, which synchronises Obsidian vaults, with Litestream backing up its database to R2
 type: application
 version: 0.1.1
-appVersion: "0.1.1"
+appVersion: "0.1.2"
