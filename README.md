@@ -39,9 +39,9 @@ Route HTTPS to the `red-sync` Service on port 8080 with your own Ingress, or set
 
 ## Setting up devices
 
-1. Install the plug-in with [BRAT](https://github.com/TfTHacker/obsidian42-brat): 'Add a beta plugin' with `whyredfire/obsidian-redsync`.
+1. Install [Red Sync](https://community.obsidian.md/plugins/red-sync) from Obsidian's community plugins: Settings, Community plugins, Browse, search for 'Red Sync', then Install and Enable.
 2. On the first device: Settings, Red Sync, 'Set up sync', 'Start a new vault'. Enter the server address and the invite code, and a passphrase for end-to-end encryption.
-3. On each further device: on a device already set up, select 'Add a device' and scan the QR code with the new device's camera (or paste the link into 'Join a vault'). Enter the same passphrase.
+3. On each further device: on a device already set up, select 'Add a device' and scan the QR code with the new device's camera (or open the link on it). The new device joins on its own; the passphrase travels inside the link, encrypted.
 
 Nothing else to configure: Red Sync uploads as you type, merges edits made on two devices at once, and keeps a conflicted copy when a merge is impossible.
 

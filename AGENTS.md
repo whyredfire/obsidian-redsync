@@ -4,7 +4,7 @@ Red Sync synchronises Obsidian vaults between a person's own devices through a s
 
 ## Layout
 
-- `plugin/`: the Obsidian plug-in (TypeScript, Bun, esbuild). Plug-in ID `red-sync`; needs Obsidian 1.13.0 or later. `manifest.json` and `versions.json` are at the repository root, where Obsidian and BRAT read them.
+- `plugin/`: the Obsidian plug-in (TypeScript, Bun, esbuild). Plug-in ID `red-sync`; needs Obsidian 1.13.0 or later. `manifest.json` and `versions.json` are at the repository root, where Obsidian reads them; the plug-in is in Obsidian's community directory (https://community.obsidian.md/plugins/red-sync).
     - `engine.ts`: synchronisation. `merge.ts`: three-way merge (lines first, then characters). `crypto.ts`: end-to-end encryption, mirrored by `server/src/export.rs` (the fixture in `server/tests/fixtures/` comes from `plugin/scripts/fixture.ts`).
 - `server/`: the sync server (Rust, axum, SQLite). `src/protocol.rs` defines every message; `cargo test` regenerates their TypeScript types in `plugin/src/protocol/` (commit them, never edit them by hand).
 - `testbench/`: docker compose with two Obsidian containers (devices A and B) and the server, plus scripts that drive the devices over the Chrome DevTools Protocol. Device B's vault is on a case-insensitive file system; its network to the server can be cut.
