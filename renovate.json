@@ -1,0 +1,45 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "schedule:weekly"
+  ],
+  "rangeStrategy": "bump",
+  "minimumReleaseAge": "3 days",
+  "separateMajorMinor": false,
+  "packageRules": [
+    {
+      "description": "Two PRs a week, majors included: everything here, and the Rust below",
+      "matchPackageNames": [
+        "*"
+      ],
+      "groupName": "TypeScript and tooling",
+      "groupSlug": "typescript"
+    },
+    {
+      "matchManagers": [
+        "cargo"
+      ],
+      "groupName": "Rust",
+      "groupSlug": "rust"
+    },
+    {
+      "description": "The image the server is built in",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "rust"
+      ],
+      "groupName": "Rust",
+      "groupSlug": "rust"
+    },
+    {
+      "description": "Tagged by the release workflow",
+      "matchPackageNames": [
+        "ghcr.io/whyredfire/obsidian-redsync"
+      ],
+      "enabled": false
+    }
+  ]
+}
