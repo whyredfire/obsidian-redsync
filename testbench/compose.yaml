@@ -20,6 +20,8 @@ services:
       REDSYNC_DATA: /data
       # A folder stands in for R2 on the test bench.
       REDSYNC_STORE: file:///data/r2
+      # Small, so the test of a file over the limit stays quick.
+      REDSYNC_MAX_FILE: 2MB
     volumes:
       - server:/data
     networks: [sync]

@@ -1,7 +1,7 @@
 import { MarkdownView, normalizePath, parseYaml, type App, type Editor, type EditorChange, type TAbstractFile, TFile, TFolder } from "obsidian";
 import DiffMatchPatch from "diff-match-patch";
 import type { Codec, Meta } from "./codec";
-import { type Account, Server, Socket } from "./connection";
+import { type Account, Server, ServerError, Socket } from "./connection";
 import { conflictedCopyPath, isText, mergeFile, toData, toText } from "./merge";
 import type { Change } from "./protocol/Change";
 import type { CommitOp } from "./protocol/CommitOp";
@@ -75,6 +75,8 @@ export class SyncEngine {
     private lastTyped = new Map<string, number>();
     /** Changes received and not yet applied. */
     private incoming: Change[] = [];
+    /** Files the server refused as too large, by path, with the mtime and size they had: not offered again until they change. */
+    private tooLarge = new Map<string, string>();
     /** Downloads started ahead of applying a batch of changes. */
     private prefetched = new Map<string, Promise<ArrayBuffer>>();
 
@@ -278,16 +280,34 @@ export class SyncEngine {
         if (prepared.length === 0) return;
         const results = await this.socket.commit(prepared.map((p) => p.op));
         const missing = prepared.filter((_, i) => results[i].status === "missingBlob");
-        if (missing.length > 0) {
-            await inParallel(missing, PARALLEL_UPLOADS, async (p) => this.server.putBlob(p.blobId!, await this.codec.encodeBlob(p.local!.data)));
-            const retried = await this.socket.commit(missing.map((p) => p.op));
-            missing.forEach((p, i) => (results[prepared.indexOf(p)] = retried[i]));
+        const refused = new Set<Prepared>();
+        await inParallel(missing, PARALLEL_UPLOADS, async (p) => {
+            try {
+                await this.server.putBlob(p.blobId!, await this.codec.encodeBlob(p.local!.data));
+            } catch (error) {
+                if (!(error instanceof ServerError && error.code === "tooLarge")) throw error;
+                refused.add(p);
+            }
+        });
+        const uploaded = missing.filter((p) => !refused.has(p));
+        if (uploaded.length > 0) {
+            const retried = await this.socket.commit(uploaded.map((p) => p.op));
+            uploaded.forEach((p, i) => (results[prepared.indexOf(p)] = retried[i]));
         }
-        for (const [i, p] of prepared.entries()) await this.handleResult(p.path, p.baseBlob, p.local, p.blobId, results[i]);
+        for (const p of refused) {
+            this.tooLarge.set(p.path, stamp(p.local!));
+            this.hooks.notice(`Red Sync: ${p.path} is larger than the server accepts, so it stays on this device only.`);
+        }
+        for (const [i, p] of prepared.entries()) {
+            if (!refused.has(p)) await this.handleResult(p.path, p.baseBlob, p.local, p.blobId, results[i]);
+        }
     }
 
     /** The commit for a changed path; null when the path matches the last sync. */
     private async prepare(path: string): Promise<Prepared | null> {
+        // shortcut: forgotten when Obsidian restarts, so a refused file is offered once per start; have the server announce its limit if that costs too much.
+        const stat = this.app.vault.getFileByPath(path)?.stat;
+        if (stat && this.tooLarge.get(path) === stamp(stat)) return null;
         const entry = this.state.get(path);
         const local = await this.readLocal(path);
         let blobId: string | null = null;
@@ -641,6 +661,8 @@ async function inParallel<T, R>(items: T[], limit: number, work: (item: T) => Pr
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
     return results;
 }
+
+const stamp = (file: { mtime: number; size: number }) => `${file.mtime}:${file.size}`;
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 

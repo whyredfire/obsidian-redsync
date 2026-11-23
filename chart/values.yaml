@@ -24,7 +24,8 @@ r2:
 server:
   # The cache of file contents on the volume; R2 holds everything
   cacheMax: 2GB
-  maxFile: 200MB
+  # Devices hold a whole file in memory, twice when encrypted; phones struggle above this
+  maxFile: 100MB
   snapshotHours: 6
   logLevel: info
   resources:

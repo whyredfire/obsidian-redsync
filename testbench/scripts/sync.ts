@@ -87,6 +87,16 @@ await run(a, `await app.vault.createBinary("image.bin", new Uint8Array(arg).buff
 const SIZE = `const f = app.vault.getFileByPath("image.bin"); return f ? (await app.vault.readBinary(f)).byteLength : 0;`;
 await waitUntil("a 300 kB binary reaches B", async () => (await run<number>(b, SIZE)) === 300_000, LIMIT_MS);
 
+// A file over the server's limit (2 MB on the test bench) stays on A, once, without blocking the rest.
+await run(a, `await app.vault.createBinary("big.bin", new ArrayBuffer(3_000_000)); await app.vault.create("after-big.md", "x");`);
+await waitUntil("a note saved with a file that is too large still reaches B", async () => (await read(b, "after-big.md")) === "x", LIMIT_MS);
+await run(a, "plugin.engine.checkAll();");
+await sleep(LIMIT_MS);
+const refusals = await run<number>(a, `return plugin.logLines.filter((line) => line.includes("big.bin is larger than the server accepts")).length;`);
+const bigOk = refusals === 1 && (await read(b, "big.bin")) === null && (await run<boolean>(a, `return plugin.status.state === "synced";`));
+if (!bigOk) failures++;
+console.log(`${bigOk ? "PASS" : "FAIL"} a file over the limit is refused once and stays on A (${refusals} refusal(s))`);
+
 // The same note open on both devices.
 const lines = Array.from({ length: 10 }, (_, i) => `Line ${i + 1}`).join("\n");
 await run(a, `await app.vault.create("Live.md", arg);`, lines);

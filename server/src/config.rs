@@ -40,7 +40,7 @@ impl Config {
         Ok(Self {
             data_dir: env_or("REDSYNC_DATA", "/data").into(),
             cache_max_bytes: parse_size(&env_or("REDSYNC_CACHE_MAX", "2GB"))?,
-            max_file_bytes: parse_size(&env_or("REDSYNC_MAX_FILE", "200MB"))?,
+            max_file_bytes: parse_size(&env_or("REDSYNC_MAX_FILE", "100MB"))?,
             snapshot_interval: Duration::from_secs(hours.max(1) * 3600),
         })
     }
