@@ -49,6 +49,8 @@ Nothing else to configure: Red Sync uploads as you type, merges edits made on tw
 
 - **Account**: Red Sync needs a Red Sync server, which you host yourself (see above), and an invite code from that server's owner. There is no hosted service and nothing to pay for.
 - **Network use**: the plug-in connects only to the server address you enter, over HTTPS and a WebSocket, to upload and download the vault's files and their history. With end-to-end encryption on, file contents and names are encrypted on the device before they are sent; with it off, the server's owner can read them.
+- **Vault access**: to synchronise the vault, the plug-in lists and reads every file in it (the `.obsidian` folder excepted) and writes the changes that come from your other devices.
+- **Clipboard**: the plug-in only writes to the clipboard, when you select a copy button (the setup link, the log, or the debug report). It never reads it.
 - **Data on the device**: the server's access token and the passphrase are kept in Obsidian's secret storage on each device.
 - No telemetry, no advertising, and no access to files outside the vault.
 

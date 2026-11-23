@@ -1,4 +1,4 @@
-import { Notice, Platform, Plugin } from "obsidian";
+import { apiVersion, Notice, Platform, Plugin } from "obsidian";
 import { type Codec, plainCodec } from "./codec";
 import { type Account, call } from "./connection";
 import { encryptedCodec } from "./crypto";
@@ -210,7 +210,7 @@ export default class RedSyncPlugin extends Plugin {
     debugReport(): string {
         const { kdfSalt: _salt, keyCheck: _check, ...settings } = this.deviceSettings ?? ({} as DeviceSettings);
         return [
-            `Red Sync ${this.manifest.version}, Obsidian ${navigator.userAgent.match(/obsidian\/([\d.]+)/)?.[1] ?? "?"}, ${Platform.isMobile ? "mobile" : "desktop"}`,
+            `Red Sync ${this.manifest.version}, Obsidian ${apiVersion}, ${Platform.isMobile ? "mobile" : "desktop"}`,
             `Status: ${statusText(this.status)}`,
             `Settings: ${JSON.stringify(settings)}`,
             "",
