@@ -142,9 +142,9 @@ export class SyncEngine {
         this.enqueue(() => this.reconcile());
     }
 
-    /** When the network returns or the app comes to the foreground: reconnect now instead of after the back-off. */
+    /** When the network returns or the app comes to the foreground: check the connection now. */
     wake(): void {
-        if (!this.socket.connected) this.socket.restart();
+        this.socket.wake();
     }
 
     // Local changes.

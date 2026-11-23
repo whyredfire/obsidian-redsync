@@ -122,7 +122,17 @@ export class Socket {
         this.drop();
     }
 
-    /** Closes and reconnects at once, e.g. after a reconciliation or when the app comes back. */
+    /**
+     * The app came back or the network returned. A connection that slept with the phone can be dead without having
+     * closed: ping it now rather than at the next interval. Already connecting: nothing to do (both events often fire).
+     */
+    wake(): void {
+        if (this.stopped || this.ws?.readyState === WebSocket.CONNECTING) return;
+        if (this.connected && this.ws) this.ping(this.ws);
+        else this.restart();
+    }
+
+    /** Closes and reconnects at once, e.g. after a reconciliation. */
     restart(): void {
         if (this.stopped) return;
         window.clearTimeout(this.retryTimer);
@@ -192,10 +202,13 @@ export class Socket {
     /** Browsers cannot see WebSocket pings, so a silently dead connection is found with our own. */
     private startPinging(ws: WebSocket): void {
         window.clearInterval(this.pingTimer);
-        this.pingTimer = window.setInterval(() => {
-            this.send(ws, { type: "ping" });
-            this.pongTimer = window.setTimeout(() => this.restart(), PONG_WITHIN_MS);
-        }, PING_EVERY_MS);
+        this.pingTimer = window.setInterval(() => this.ping(ws), PING_EVERY_MS);
+    }
+
+    private ping(ws: WebSocket): void {
+        window.clearTimeout(this.pongTimer);
+        this.send(ws, { type: "ping" });
+        this.pongTimer = window.setTimeout(() => this.restart(), PONG_WITHIN_MS);
     }
 
     private drop(): void {
