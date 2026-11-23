@@ -8,7 +8,7 @@ Red Sync synchronises Obsidian vaults between a person's own devices through a s
     - `engine.ts`: synchronisation. `merge.ts`: three-way merge (lines first, then characters). `crypto.ts`: end-to-end encryption, mirrored by `server/src/export.rs` (the fixture in `server/tests/fixtures/` comes from `plugin/scripts/fixture.ts`).
 - `server/`: the sync server (Rust, axum, SQLite). `src/protocol.rs` defines every message; `cargo test` regenerates their TypeScript types in `plugin/src/protocol/` (commit them, never edit them by hand).
 - `testbench/`: docker compose with two Obsidian containers (devices A and B) and the server, plus scripts that drive the devices over the Chrome DevTools Protocol. Device B's vault is on a case-insensitive file system; its network to the server can be cut.
-- `chart/`: the Helm chart (server with a Litestream sidecar, one pod, `Recreate`); its version follows the release through `version-bump.mjs`.
+- `chart/`: the Helm chart (server with a Litestream sidecar, one pod, `Recreate`); `version-bump.mjs` sets its `appVersion` to each release; bump its own `version` by hand when the chart changes.
 - `deploy/`: the production compose file (server and Litestream). HTTPS is left to the operator's own reverse proxy; keep anything host-specific out of it.
 
 ## Conventions
