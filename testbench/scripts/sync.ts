@@ -202,6 +202,20 @@ console.log(`${bulkOnA === 300 ? "PASS" : "FAIL"} files missing in bulk at start
 await run(b, "plugin.engine.checkAll();");
 await waitUntil("'Check everything again' brings them back on B", async () => (await run<number>(b, bulk)) === 300, 15_000);
 
+// A full quota is reported on A; once raised, the note goes through.
+const userList = compose("exec", "-T", "server", "redsync-server", "user", "list");
+const owner = userList.slice(0, userList.indexOf(await run<string>(a, "return plugin.deviceSettings.vaultId;"))).match(/^\S+(?=: )/gm)!.at(-1)!;
+compose("exec", "-T", "server", "redsync-server", "user", "quota", owner, "1");
+await run(a, `await app.vault.create("Too much.md", "over the quota");`);
+await waitUntil(
+    "A says storage on the server is full",
+    () => run<boolean>(a, `return plugin.logLines.some((line) => line.includes("storage on the server is full"));`),
+    LIMIT_MS,
+);
+compose("exec", "-T", "server", "redsync-server", "user", "quota", owner, "10GB");
+await run(a, `await app.vault.modify(app.vault.getFileByPath("Too much.md"), "within the quota");`);
+await waitUntil("with more storage, the note reaches B", async () => (await read(b, "Too much.md")) === "within the quota", LIMIT_MS);
+
 // Device B's vault is on a case-insensitive file system, like macOS: it must not let one overwrite the other.
 await run(a, `await app.vault.create("Case.md", "upper"); await app.vault.create("case.md", "lower");`);
 await sleep(LIMIT_MS);

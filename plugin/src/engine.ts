@@ -80,6 +80,8 @@ export class SyncEngine {
     private incoming: Change[] = [];
     /** Files the server refused as too large, by path, with the mtime and size they had: not offered again until they change. */
     private tooLarge = new Map<string, string>();
+    /** The notice that storage on the server is full was shown; once per start is enough. */
+    private storageFullSaid = false;
     /** The server speaks another protocol version: stopped until one of them is updated. */
     private unsupported = false;
     /** Downloads started ahead of applying a batch of changes. */
@@ -298,8 +300,12 @@ export class SyncEngine {
             try {
                 await this.server.putBlob(p.blobId!, await this.codec.encodeBlob(p.local!.data));
             } catch (error) {
-                if (!(error instanceof ServerError && error.code === "tooLarge")) throw error;
-                refused.add(p);
+                if (error instanceof ServerError && error.code === "tooLarge") return void refused.add(p);
+                if (error instanceof ServerError && error.code === "quotaExceeded" && !this.storageFullSaid) {
+                    this.storageFullSaid = true;
+                    this.hooks.notice("Red Sync: storage on the server is full, so changes on this device are not uploaded. Ask the server's owner for more.");
+                }
+                throw error;
             }
         });
         const uploaded = missing.filter((p) => !refused.has(p));
