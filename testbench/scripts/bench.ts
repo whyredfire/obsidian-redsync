@@ -52,6 +52,7 @@ export const snapshot = (page: Page) =>
         const out = {};
         const open = new Map(app.workspace.getLeavesOfType("markdown").map((leaf) => [leaf.view.file?.path, leaf.view.editor]));
         for (const file of app.vault.getFiles()) out[file.path] = open.get(file.path)?.getValue() ?? (await app.vault.read(file).catch(() => "(vanished)"));
+        for (const folder of app.vault.getAllFolders()) out[folder.path + "/"] = "(folder)";
         return out;`,
     );
 
@@ -76,7 +77,8 @@ export async function resetDevices(pages: Page[]): Promise<void> {
         await run(
             page,
             `
-            document.querySelectorAll(".modal-container").forEach((modal) => modal.remove());
+            // Dialogues and notices left by an earlier run would cover what this run clicks.
+            document.querySelectorAll(".modal-container, .notice").forEach((element) => element.remove());
             app.saveLocalStorage("red-sync-settings", null);
             await app.plugins.disablePlugin("red-sync");
             await app.plugins.enablePlugin("red-sync");

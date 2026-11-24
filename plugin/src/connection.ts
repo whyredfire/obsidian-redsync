@@ -8,7 +8,7 @@ import type { ServerMessage } from "./protocol/ServerMessage";
 import type { VersionEntry } from "./protocol/VersionEntry";
 import type { Cursor } from "./state";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const COMMIT_TIMEOUT_MS = 30_000;
 const PING_EVERY_MS = 20_000;
 const PONG_WITHIN_MS = 10_000;
@@ -197,7 +197,8 @@ export class Socket {
             if (this.ws !== ws) return;
             this.drop();
             this.handlers.closed(event.code);
-            if (event.code === 4001 || event.code === 4003) this.stopped = true;
+            // 4000: another protocol version; 4001: unauthorised; 4003: revoked.
+            if (event.code === 4000 || event.code === 4001 || event.code === 4003) this.stopped = true;
             if (this.stopped) return;
             this.retryTimer = window.setTimeout(() => this.open(), this.retryMs);
             this.retryMs = Math.min(this.retryMs * 2, 30_000);

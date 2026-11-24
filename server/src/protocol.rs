@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+/// 2: folders are entries of their own, their path ending in "/"; devices speaking 1 would take them for files.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A message from a device over the WebSocket.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]

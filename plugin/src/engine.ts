@@ -21,6 +21,9 @@ const MASS_DELETION_SHARE = 0.25;
 const BATCH = 50;
 const PARALLEL_UPLOADS = 6;
 
+/** Folders are synchronised as entries of their own, their path ending in "/", so empty ones reach other devices too. */
+const isFolder = (path: string) => path.endsWith("/");
+
 export type Status =
     | { state: "synced" | "syncing" | "offline"; pending: number }
     | { state: "stopped"; reason: string };
@@ -77,6 +80,8 @@ export class SyncEngine {
     private incoming: Change[] = [];
     /** Files the server refused as too large, by path, with the mtime and size they had: not offered again until they change. */
     private tooLarge = new Map<string, string>();
+    /** The server speaks another protocol version: stopped until one of them is updated. */
+    private unsupported = false;
     /** Downloads started ahead of applying a batch of changes. */
     private prefetched = new Map<string, Promise<ArrayBuffer>>();
 
@@ -117,6 +122,10 @@ export class SyncEngine {
             closed: (code) => {
                 if (code === 4001 || code === 4003) {
                     this.hooks.revoked();
+                } else if (code === 4000) {
+                    this.unsupported = true;
+                    this.hooks.notice("Red Sync: this device and the server run different versions of Red Sync. Update both to the latest release.");
+                    this.report();
                 } else {
                     this.report();
                 }
@@ -177,6 +186,8 @@ export class SyncEngine {
                 for (const path of this.state.files.keys()) if (path.startsWith(`${folder}/`)) this.touch(path);
             }
             for (const child of this.app.vault.getFiles()) if (child.path.startsWith(`${file.path}/`)) this.touch(child.path);
+            // The folder itself (also when just created) and the folders inside it.
+            for (const child of this.app.vault.getAllFolders()) if (`${child.path}/`.startsWith(`${file.path}/`)) this.touch(`${child.path}/`);
         }
     }
 
@@ -247,6 +258,7 @@ export class SyncEngine {
     }
 
     private report(): void {
+        if (this.unsupported) return this.hooks.status({ state: "stopped", reason: "Update Red Sync on this device and the server." });
         const pending = this.running + this.waiting.size + this.debounced.size;
         if (!this.socket.connected) this.hooks.status({ state: "offline", pending });
         else this.hooks.status({ state: pending > 0 ? "syncing" : "synced", pending });
@@ -260,7 +272,8 @@ export class SyncEngine {
                 this.waiting.add(file.path);
             }
         }
-        const missing = [...this.state.files].filter(([path, entry]) => entry.blobId !== null && !this.app.vault.getFileByPath(path));
+        for (const folder of this.app.vault.getAllFolders()) if (!this.state.get(`${folder.path}/`)) this.waiting.add(`${folder.path}/`);
+        const missing = [...this.state.files].filter(([path, entry]) => entry.blobId !== null && !this.exists(path));
         if (this.massDeletion(missing.length)) {
             this.hooks.notice(
                 `Red Sync: ${missing.length} synchronised files are missing from this vault, so they were not deleted on your other devices. To bring them back, select 'Check everything again' in Red Sync's settings.`,
@@ -389,14 +402,22 @@ export class SyncEngine {
 
     /** Makes the file what the server says; `local` (what is on this device) is unchanged since the last sync. */
     private async takeRemote(path: string, remote: Remote, local: Local | null): Promise<void> {
+        if (isFolder(path)) {
+            const folder = this.app.vault.getFolderByPath(path.slice(0, -1));
+            await this.remember(path, remote.version, remote.blobId);
+            // A folder deleted elsewhere that still holds files here goes when they do (removeEmptyFolders).
+            if (remote.blobId === null && folder?.children.length === 0) {
+                await this.trash(folder);
+                await this.removeEmptyFolders(path.slice(0, -1));
+            }
+            if (remote.blobId !== null && !folder) await this.app.vault.createFolder(path.slice(0, -1));
+            return;
+        }
         if (remote.blobId === null) {
             const file = this.app.vault.getFileByPath(path);
-            if (file) {
-                await this.app.fileManager.trashFile(file);
-                // The system trash can fail silently (some network or container file systems): use Obsidian's own.
-                if (this.app.vault.getFileByPath(path)) await this.app.vault.trash(file, false);
-            }
+            if (file) await this.trash(file);
             await this.remember(path, remote.version, null);
+            await this.removeEmptyFolders(path);
             return;
         }
         const data = await this.download(remote.blobId);
@@ -519,13 +540,14 @@ export class SyncEngine {
             }
         }
         // What the server does not know: upload it as new.
-        for (const file of this.app.vault.getFiles()) {
-            if (seen.has(file.path)) continue;
-            if (this.state.get(file.path)) await this.state.remove(file.path);
-            this.waiting.add(file.path);
+        const here = [...this.app.vault.getFiles().map((file) => file.path), ...this.app.vault.getAllFolders().map((folder) => `${folder.path}/`)];
+        for (const path of here) {
+            if (seen.has(path)) continue;
+            if (this.state.get(path)) await this.state.remove(path);
+            this.waiting.add(path);
         }
         for (const path of [...this.state.files.keys()]) {
-            if (!seen.has(path) && !this.app.vault.getFileByPath(path)) await this.state.remove(path);
+            if (!seen.has(path) && !this.exists(path)) await this.state.remove(path);
         }
         this.epoch = listing.epoch;
         await this.state.setCursor({ epoch: listing.epoch, seq: listing.headSeq });
@@ -537,7 +559,27 @@ export class SyncEngine {
 
     private async pathOf(meta: string): Promise<string> {
         const decoded: Meta = await this.codec.decodeMeta(meta);
-        return normalizePath(decoded.path.normalize("NFC"));
+        const path = normalizePath(decoded.path.normalize("NFC"));
+        return isFolder(decoded.path) ? `${path}/` : path;
+    }
+
+    private exists(path: string): boolean {
+        return isFolder(path) ? this.app.vault.getFolderByPath(path.slice(0, -1)) !== null : this.app.vault.getFileByPath(path) !== null;
+    }
+
+    private async trash(file: TAbstractFile): Promise<void> {
+        await this.app.fileManager.trashFile(file);
+        // The system trash can fail silently (some network or container file systems): use Obsidian's own.
+        if (this.app.vault.getAbstractFileByPath(file.path)) await this.app.vault.trash(file, false);
+    }
+
+    /** After a deletion from elsewhere: removes the folders around `path` that were deleted elsewhere too and are now empty. */
+    private async removeEmptyFolders(path: string): Promise<void> {
+        for (let end = path.lastIndexOf("/"); end > 0; end = path.lastIndexOf("/", end - 1)) {
+            const folder = this.app.vault.getFolderByPath(path.slice(0, end));
+            if (!folder || folder.children.length > 0 || this.state.get(`${folder.path}/`)?.blobId !== null) return;
+            await this.trash(folder);
+        }
     }
 
     private download(blobId: string): Promise<ArrayBuffer> {
@@ -600,6 +642,7 @@ export class SyncEngine {
 
     /** The file as the user sees it: the editor's text when it is open, which may not be saved yet. */
     private async readLocal(path: string): Promise<Local | null> {
+        if (isFolder(path)) return this.exists(path) ? { data: new ArrayBuffer(0), mtime: 0, size: 0 } : null;
         const file = this.app.vault.getFileByPath(path);
         if (!file) return null;
         const editor = this.editorFor(path);

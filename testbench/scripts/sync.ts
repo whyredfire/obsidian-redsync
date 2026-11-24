@@ -137,6 +137,23 @@ await waitUntil(
     40_000,
 );
 
+// Folders: an empty one, created, renamed, and deleted on A; and one deleted with a note in it.
+const folderOn = (page: Page, path: string) => run<boolean>(page, "return app.vault.getFolderByPath(arg) !== null;", path);
+await run(a, `await app.vault.createFolder("Empty");`);
+await waitUntil("an empty folder reaches B", () => folderOn(b, "Empty"), LIMIT_MS);
+await run(a, `await app.fileManager.renameFile(app.vault.getFolderByPath("Empty"), "Still empty");`);
+await waitUntil("its rename reaches B", async () => (await folderOn(b, "Still empty")) && !(await folderOn(b, "Empty")), LIMIT_MS);
+await run(a, `await app.fileManager.trashFile(app.vault.getFolderByPath("Still empty"));`);
+await waitUntil("its deletion reaches B", async () => !(await folderOn(b, "Still empty")), LIMIT_MS);
+await run(a, `await app.vault.createFolder("Outer/Inner/Innermost");`);
+await waitUntil("nested empty folders reach B", () => folderOn(b, "Outer/Inner/Innermost"), LIMIT_MS);
+await run(a, `await app.fileManager.trashFile(app.vault.getFolderByPath("Outer"));`);
+await waitUntil("deleting the outer one removes them all on B", async () => !(await folderOn(b, "Outer")), LIMIT_MS);
+await run(a, `await app.vault.createFolder("Box"); await app.vault.create("Box/inside.md", "x");`);
+await waitUntil("a folder with a note reaches B", async () => (await read(b, "Box/inside.md")) === "x", LIMIT_MS);
+await run(a, `await app.fileManager.trashFile(app.vault.getFolderByPath("Box"));`);
+await waitUntil("deleting it removes both on B", async () => !(await folderOn(b, "Box")), LIMIT_MS);
+
 // History: an earlier version of a note, restored from A's history view, reaches B.
 await run(a, `await app.vault.create("History.md", "first");`);
 await waitUntil("a note for the history reaches B", async () => (await read(b, "History.md")) === "first", LIMIT_MS);
