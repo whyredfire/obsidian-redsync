@@ -85,12 +85,17 @@ pub async fn export(store: &dyn ObjectStore, vault: &str, out: &Path, passphrase
             Some(key) => serde_json::from_slice(&key.open(&STANDARD.decode(&file.meta)?)?)?,
             None => serde_json::from_str(&file.meta)?,
         };
+        let path = target(out, &meta.path)?;
+        // A folder: its path ends in "/", and it has no content.
+        if meta.path.ends_with('/') {
+            std::fs::create_dir_all(&path)?;
+            continue;
+        }
         let data = store.get(&object_path(vault, blob)).await?.bytes().await?;
         let content = match &key {
             Some(key) => key.open(&data)?,
             None => data.to_vec(),
         };
-        let path = target(out, &meta.path)?;
         std::fs::create_dir_all(path.parent().unwrap())?;
         std::fs::write(&path, content)?;
         if let Ok(mtime) = u64::try_from(meta.mtime) {
@@ -115,6 +120,36 @@ mod tests {
         assert_eq!(meta.path, "Folder/Note.md");
         assert_eq!(key.open(&STANDARD.decode(text("blob")).unwrap()).unwrap(), b"Hello from the plug-in.\n");
         assert!(VaultKey::derive("wrong", &text("kdfSalt"), &text("keyCheck")).is_err());
+    }
+
+    #[tokio::test]
+    async fn exports_files_and_empty_folders() {
+        use crate::protocol::FileEntry;
+        use crate::snapshots::{SnapshotUser, SnapshotVault};
+        let store = object_store::memory::InMemory::new();
+        let entry = |path: &str, blob: &str| FileEntry {
+            path_id: path.into(),
+            version: 1,
+            seq: 1,
+            blob_id: Some(blob.into()),
+            meta: serde_json::json!({ "path": path, "mtime": 0, "size": 0 }).to_string(),
+        };
+        let snapshot = Snapshot {
+            format: 1,
+            created_at: 0,
+            vault: SnapshotVault { id: "v".into(), user_id: "u".into(), name: "Notes".into(), created_at: 0, seq: 1, encrypted: false, kdf_salt: None, key_check: None },
+            user: SnapshotUser { id: "u".into(), name: "me".into(), quota_bytes: 0, created_at: 0, removed_at: None },
+            devices: vec![],
+            // The folder after the note in it, and an empty one.
+            files: vec![entry("Folder/Note.md", "note"), entry("Folder/", "empty"), entry("Empty/", "empty")],
+        };
+        store.put(&ObjectPath::from("vaults/v/snapshots/0000000000001.json"), serde_json::to_vec(&snapshot).unwrap().into()).await.unwrap();
+        store.put(&object_path("v", "note"), b"Hello".to_vec().into()).await.unwrap();
+        store.put(&object_path("v", "empty"), Vec::new().into()).await.unwrap();
+        let out = tempfile::tempdir().unwrap();
+        export(&store, "v", out.path(), None).await.unwrap();
+        assert_eq!(std::fs::read(out.path().join("Folder/Note.md")).unwrap(), b"Hello");
+        assert!(out.path().join("Empty").is_dir());
     }
 
     #[test]
