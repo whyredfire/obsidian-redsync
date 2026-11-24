@@ -92,6 +92,12 @@ pub fn commit(
                meta = excluded.meta, updated_at = excluded.updated_at",
             params![vault_id, op.path_id, version, head, op.blob_id, op.meta, now],
         )?;
+        if let Some(released) = &blob_id {
+            tx.execute(
+                "UPDATE blobs SET released_at = ?1 WHERE vault_id = ?2 AND blob_id = ?3",
+                params![now, vault_id, released],
+            )?;
+        }
         results.push(CommitResult::Ok { version, seq: head });
         changes.push(Change {
             seq: head,

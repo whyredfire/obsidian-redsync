@@ -1,6 +1,6 @@
 //! Snapshots in R2 every few hours, and rebuilding the database from them.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Context, Result, bail};
 use futures_util::TryStreamExt;
@@ -10,7 +10,7 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::config::{Config, DAY_MS};
+use crate::config::{Config, LOG_TTL_MS};
 use crate::db::{self, now_ms, random_id};
 use crate::protocol::FileEntry;
 use crate::sync;
@@ -130,24 +130,10 @@ fn read_snapshot(c: &Connection, vault_id: &str, now: i64) -> Result<Snapshot> {
     Ok(Snapshot { format: 1, created_at: now, vault, user, devices, files: listing.files })
 }
 
-/// Which snapshots to keep: all from the last 7 days, the newest of each day for 90 days,
-/// the newest of each week for a year, and always the newest one.
+/// Which snapshots to keep: those no older than the change log, as the blobs of older ones may be deleted, and
+/// always the newest one (its blobs are all current).
 pub fn snapshots_to_keep(created: &[i64], now: i64) -> HashSet<i64> {
-    let mut keep: HashSet<i64> = created.iter().copied().filter(|t| now - t <= 7 * DAY_MS).collect();
-    let mut newest_per_bucket: HashMap<(u8, i64), i64> = HashMap::new();
-    for &t in created {
-        let age = now - t;
-        let bucket = if age <= 90 * DAY_MS {
-            (0, t / DAY_MS)
-        } else if age <= 365 * DAY_MS {
-            (1, t / (7 * DAY_MS))
-        } else {
-            continue;
-        };
-        let newest = newest_per_bucket.entry(bucket).or_insert(t);
-        *newest = (*newest).max(t);
-    }
-    keep.extend(newest_per_bucket.into_values());
+    let mut keep: HashSet<i64> = created.iter().copied().filter(|t| now - t <= LOG_TTL_MS).collect();
     keep.extend(created.iter().max());
     keep
 }
@@ -220,7 +206,7 @@ pub async fn restore(config: &Config, store: &dyn ObjectStore) -> Result<String>
         }
         for blob in &blobs {
             tx.execute(
-                "INSERT INTO blobs(vault_id, blob_id, size, created_at, in_r2, cached, last_access) VALUES(?1, ?2, ?3, ?4, 1, 0, ?4)",
+                "INSERT INTO blobs(vault_id, blob_id, size, created_at, in_r2, cached, last_access, released_at) VALUES(?1, ?2, ?3, ?4, 1, 0, ?4, ?4)",
                 params![vault.id, blob.location.filename(), blob.size as i64, now],
             )?;
         }
@@ -242,19 +228,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn retention_thins_out_with_age() {
-        let now = 1000 * DAY_MS;
-        let hour = DAY_MS / 24;
-        // Every 6 hours for 400 days.
-        let created: Vec<i64> = (0..400 * 4).map(|i| now - i * 6 * hour).collect();
+    fn snapshots_are_kept_as_long_as_the_change_log() {
+        let day = crate::config::DAY_MS;
+        let now = 1000 * day;
+        // Every 6 hours for 60 days.
+        let created: Vec<i64> = (0..60 * 4).map(|i| now - i * day / 4).collect();
         let keep = snapshots_to_keep(&created, now);
-        let recent = keep.iter().filter(|t| now - **t <= 7 * DAY_MS).count();
-        let daily = keep.iter().filter(|t| (now - **t > 7 * DAY_MS) && (now - **t <= 90 * DAY_MS)).count();
-        let weekly = keep.iter().filter(|t| now - **t > 90 * DAY_MS).count();
-        assert_eq!(recent, 29);
-        assert!((83..=84).contains(&daily), "{daily}");
-        assert!((39..=40).contains(&weekly), "{weekly}");
-        assert!(keep.iter().all(|t| now - t <= 365 * DAY_MS));
-        assert!(snapshots_to_keep(&[now - 500 * DAY_MS], now).contains(&(now - 500 * DAY_MS)));
+        assert_eq!(keep.len(), 30 * 4 + 1);
+        assert!(keep.iter().all(|t| now - t <= LOG_TTL_MS));
+        assert!(snapshots_to_keep(&[now - 500 * day], now).contains(&(now - 500 * day)));
     }
 }

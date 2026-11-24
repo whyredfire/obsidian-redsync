@@ -207,7 +207,40 @@ pub async fn maintenance(state: &AppState) -> Result<()> {
             Ok(())
         })
         .await?;
+    let collected = collect_garbage(state, now).await?;
+    if collected > 0 {
+        tracing::info!("deleted {collected} old versions");
+    }
     purge_removed_users(state, now).await
+}
+
+/// Deletes the blobs no file has used for LOG_TTL_MS: the change log and every snapshot kept are younger.
+/// Returns how many. The rows go first, so a commit that uses a blob again meanwhile uploads it again.
+pub async fn collect_garbage(state: &AppState, now: i64) -> Result<usize> {
+    let cutoff = now - LOG_TTL_MS;
+    let garbage = state
+        .db
+        .call(move |c| {
+            c.prepare(
+                "DELETE FROM blobs WHERE released_at < ?1
+                   AND NOT EXISTS(SELECT 1 FROM files f WHERE f.vault_id = blobs.vault_id AND f.blob_id = blobs.blob_id)
+                 RETURNING vault_id, blob_id",
+            )?
+            .query_map([cutoff], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .await?;
+    for (vault, blob) in &garbage {
+        if exists(state, vault, blob).await? {
+            continue;
+        }
+        match state.store.delete(&object_path(vault, blob)).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(error) => tracing::warn!("blob {blob} of vault {vault} stays in the object store: {error:#}"),
+        }
+        discard(state, vault, blob).await;
+    }
+    Ok(garbage.len())
 }
 
 pub async fn flush_touched(state: &AppState) -> Result<()> {

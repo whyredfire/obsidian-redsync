@@ -50,6 +50,7 @@ CREATE INDEX IF NOT EXISTS files_by_blob ON files(vault_id, blob_id);
 CREATE TABLE IF NOT EXISTS blobs(
   vault_id TEXT NOT NULL, blob_id TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL,
   in_r2 INTEGER NOT NULL DEFAULT 0, cached INTEGER NOT NULL DEFAULT 1, last_access INTEGER NOT NULL,
+  released_at INTEGER NOT NULL,
   PRIMARY KEY(vault_id, blob_id)
 );
 CREATE TABLE IF NOT EXISTS requests(
@@ -100,6 +101,12 @@ fn migrate(connection: &Connection) -> rusqlite::Result<()> {
         connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('enrolments') WHERE name = 'sealed')", [], |r| r.get(0))?;
     if !has_sealed {
         connection.execute_batch("ALTER TABLE enrolments ADD COLUMN sealed TEXT")?;
+    }
+    let has_released: bool =
+        connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('blobs') WHERE name = 'released_at')", [], |r| r.get(0))?;
+    if !has_released {
+        connection.execute("ALTER TABLE blobs ADD COLUMN released_at INTEGER NOT NULL DEFAULT 0", [])?;
+        connection.execute("UPDATE blobs SET released_at = ?1", [now_ms()])?;
     }
     Ok(())
 }

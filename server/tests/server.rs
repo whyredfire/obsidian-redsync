@@ -320,6 +320,28 @@ async fn stored_blobs_are_served_under_a_lowered_limit_and_lost_ones_are_not_fou
     assert_eq!(lowered.get_blob(&laptop, "lost").await.0, StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn versions_are_deleted_once_past_the_change_log() {
+    let bench = bench().await;
+    let laptop = bench.new_vault("me").await;
+    let vault = laptop.vault.id.clone();
+    for (blob, bytes) in [("old", &b"old"[..]), ("new", b"new"), ("unused", b"never committed")] {
+        bench.put_blob(&laptop, blob, bytes).await;
+    }
+    bench.commit(&laptop, "r1", vec![op("note.md", 0, Some("old"))]).await;
+    bench.commit(&laptop, "r2", vec![op("note.md", 1, Some("new"))]).await;
+    blobs::upload_pending(&bench.state).await.unwrap();
+
+    let day = 86_400_000;
+    let now = db::now_ms();
+    assert_eq!(blobs::collect_garbage(&bench.state, now + day).await.unwrap(), 0, "the history keeps them");
+    assert_eq!(blobs::collect_garbage(&bench.state, now + 31 * day).await.unwrap(), 2);
+    assert_eq!(bench.get_blob(&laptop, "old").await.0, StatusCode::NOT_FOUND);
+    assert!(bench.store.get(&blobs::object_path(&vault, "old")).await.is_err());
+    assert!(!blobs::cache_path(&bench.state, &vault, "unused").exists());
+    assert_eq!(bench.get_blob(&laptop, "new").await, (StatusCode::OK, b"new".to_vec()));
+}
+
 #[test]
 fn eviction_keeps_pinned_and_unsaved_blobs() {
     use redsync_server::blobs::{CachedBlob, choose_victims};

@@ -56,7 +56,7 @@ Nothing else to configure: Red Sync uploads as you type, merges edits made on tw
 
 ## Backups and recovery
 
-R2 holds every version of every file, a snapshot of each vault every 6 hours, and (through Litestream) the server's database.
+R2 holds every file, its versions from the last 30 days, a snapshot of each vault every 6 hours (kept for 30 days), and (through Litestream) the server's database.
 
 | Lost | Recovery |
 | --- | --- |
