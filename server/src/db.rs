@@ -25,11 +25,13 @@ CREATE TABLE IF NOT EXISTS invites(
 CREATE TABLE IF NOT EXISTS vaults(
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL,
   epoch TEXT NOT NULL, head_seq INTEGER NOT NULL DEFAULT 0, snapshot_seq INTEGER NOT NULL DEFAULT 0,
+  pruned_seq INTEGER NOT NULL DEFAULT 0,
   encrypted INTEGER NOT NULL, kdf_salt TEXT, key_check TEXT
 );
 CREATE TABLE IF NOT EXISTS devices(
   id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, name TEXT NOT NULL, token_hash BLOB NOT NULL UNIQUE,
-  created_at INTEGER NOT NULL, last_seen INTEGER, revoked INTEGER NOT NULL DEFAULT 0
+  created_at INTEGER NOT NULL, last_seen INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
+  cursor_seq INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS enrolments(
   code_hash BLOB PRIMARY KEY, vault_id TEXT NOT NULL, expires_at INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0,
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS versions(
   PRIMARY KEY(vault_id, seq)
 );
 CREATE INDEX IF NOT EXISTS versions_by_path ON versions(vault_id, path_id, version);
+CREATE INDEX IF NOT EXISTS versions_by_blob ON versions(vault_id, blob_id);
 CREATE TABLE IF NOT EXISTS files(
   vault_id TEXT NOT NULL, path_id TEXT NOT NULL, version INTEGER NOT NULL, seq INTEGER NOT NULL,
   blob_id TEXT, meta TEXT NOT NULL, updated_at INTEGER NOT NULL,
@@ -50,7 +53,7 @@ CREATE INDEX IF NOT EXISTS files_by_blob ON files(vault_id, blob_id);
 CREATE TABLE IF NOT EXISTS blobs(
   vault_id TEXT NOT NULL, blob_id TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL,
   in_r2 INTEGER NOT NULL DEFAULT 0, cached INTEGER NOT NULL DEFAULT 1, last_access INTEGER NOT NULL,
-  released_at INTEGER NOT NULL,
+  snapshot_at INTEGER,
   PRIMARY KEY(vault_id, blob_id)
 );
 CREATE TABLE IF NOT EXISTS requests(
@@ -95,20 +98,29 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(connection)
 }
 
-/// Columns added after 0.1.0, for databases created before them.
+/// Columns added after 0.1.0, for databases created before them; `fill` sets them for the rows already there.
 fn migrate(connection: &Connection) -> rusqlite::Result<()> {
-    let has_sealed: bool =
-        connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('enrolments') WHERE name = 'sealed')", [], |r| r.get(0))?;
-    if !has_sealed {
-        connection.execute_batch("ALTER TABLE enrolments ADD COLUMN sealed TEXT")?;
-    }
-    let has_released: bool =
-        connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('blobs') WHERE name = 'released_at')", [], |r| r.get(0))?;
-    if !has_released {
-        connection.execute("ALTER TABLE blobs ADD COLUMN released_at INTEGER NOT NULL DEFAULT 0", [])?;
-        connection.execute("UPDATE blobs SET released_at = ?1", [now_ms()])?;
-    }
-    Ok(())
+    let add = |table: &str, column: &str, definition: &str, fill: &str| -> rusqlite::Result<()> {
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+            [table, column],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            connection.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}; {fill}"))?;
+        }
+        Ok(())
+    };
+    add("enrolments", "sealed", "TEXT", "")?;
+    // Snapshots taken before the column existed may name any blob.
+    add("blobs", "snapshot_at", "INTEGER", &format!("UPDATE blobs SET snapshot_at = {};", now_ms()))?;
+    add("devices", "cursor_seq", "INTEGER NOT NULL DEFAULT 0", "")?;
+    add(
+        "vaults",
+        "pruned_seq",
+        "INTEGER NOT NULL DEFAULT 0",
+        "UPDATE vaults SET pruned_seq = COALESCE((SELECT MIN(seq) - 1 FROM versions WHERE vault_id = vaults.id), head_seq);",
+    )
 }
 
 pub fn now_ms() -> i64 {

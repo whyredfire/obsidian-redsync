@@ -8,7 +8,7 @@ import type { ServerMessage } from "./protocol/ServerMessage";
 import type { VersionEntry } from "./protocol/VersionEntry";
 import type { Cursor } from "./state";
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const COMMIT_TIMEOUT_MS = 30_000;
 const PING_EVERY_MS = 20_000;
 const PONG_WITHIN_MS = 10_000;

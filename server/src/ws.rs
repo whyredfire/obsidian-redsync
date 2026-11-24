@@ -83,8 +83,10 @@ async fn connected(
     let (vault_epoch, head, reset) = state
         .db
         .call(move |c| -> Result<_> {
-            c.execute("UPDATE devices SET last_seen = ?1 WHERE id = ?2", params![now_ms(), device])?;
-            sync::catch_up_state(c, &vault_id, epoch.as_deref(), since)
+            let (vault_epoch, head, reset) = sync::catch_up_state(c, &vault_id, epoch.as_deref(), since)?;
+            let seen = if reset { head } else { since };
+            c.execute("UPDATE devices SET last_seen = ?1, cursor_seq = ?2 WHERE id = ?3", params![now_ms(), seen, device])?;
+            Ok((vault_epoch, head, reset))
         })
         .await?;
     send(&mut sender, &ServerMessage::Welcome { epoch: vault_epoch.clone(), head_seq: head, device_id: device_id.clone() }).await?;
@@ -96,6 +98,23 @@ async fn connected(
     };
     cursor = backfill(state, &mut sender, &vault, cursor).await?;
 
+    let outcome = live(state, &mut sender, &mut receiver, &mut events, &vault, &device_id, &mut cursor).await;
+    // Thinning the history keeps the versions a device last saw (sync::thin_history).
+    let (device, seq) = (device_id.clone(), cursor);
+    state.db.call(move |c| c.execute("UPDATE devices SET cursor_seq = ?1 WHERE id = ?2", params![seq, device])).await?;
+    outcome
+}
+
+/// Commits from the device and changes from the others, until the connection ends.
+async fn live(
+    state: &AppState,
+    sender: &mut Sender,
+    receiver: &mut futures_util::stream::SplitStream<WebSocket>,
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    vault: &str,
+    device_id: &str,
+    cursor: &mut i64,
+) -> Result<()> {
     let mut ping = tokio::time::interval(Duration::from_secs(30));
     ping.tick().await;
     loop {
@@ -103,18 +122,18 @@ async fn connected(
             incoming = receiver.next() => match incoming {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text)? {
                     ClientMessage::Commit { req, ops } => {
-                        let (vault_id, device, request) = (vault.clone(), device_id.clone(), req.clone());
+                        let (vault_id, device, request) = (vault.to_owned(), device_id.to_owned(), req.clone());
                         let count = ops.len();
                         let (results, changes) = state.db.call(move |c| sync::commit(c, &vault_id, &device, &request, &ops)).await?;
                         let conflicts = results.iter().filter(|r| matches!(r, CommitResult::Conflict { .. })).count();
                         let missing = results.iter().filter(|r| matches!(r, CommitResult::MissingBlob)).count();
                         tracing::info!("device {device_id}: {count} changes sent, {} accepted, {conflicts} conflicts, {missing} awaiting content", changes.len());
                         for change in changes {
-                            state.publish(&vault, Event::Change(change));
+                            state.publish(vault, Event::Change(change));
                         }
-                        send(&mut sender, &ServerMessage::Result { req, results }).await?;
+                        send(sender, &ServerMessage::Result { req, results }).await?;
                     }
-                    ClientMessage::Ping => send(&mut sender, &ServerMessage::Pong).await?,
+                    ClientMessage::Ping => send(sender, &ServerMessage::Pong).await?,
                     ClientMessage::Hello { .. } => bail!("hello sent twice"),
                 },
                 Some(Ok(Message::Close(_))) | None => return Ok(()),
@@ -122,27 +141,27 @@ async fn connected(
                 Some(Err(error)) => return Err(error.into()),
             },
             event = events.recv() => match event {
-                Ok(Event::Change(change)) if change.seq == cursor + 1 => {
-                    cursor = change.seq;
-                    send(&mut sender, &ServerMessage::Changes { up_to: cursor, items: vec![change], more: false }).await?;
+                Ok(Event::Change(change)) if change.seq == *cursor + 1 => {
+                    let after = std::mem::replace(cursor, change.seq);
+                    send(sender, &ServerMessage::Changes { after, up_to: *cursor, items: vec![change], more: false }).await?;
                 }
                 // A gap (or a missed message): read the log instead.
-                Ok(Event::Change(change)) if change.seq > cursor => cursor = backfill(state, &mut sender, &vault, cursor).await?,
-                Ok(Event::Revoked(id)) if id == device_id => return close(&mut sender, CLOSE_REVOKED, "revoked").await,
+                Ok(Event::Change(change)) if change.seq > *cursor => *cursor = backfill(state, sender, vault, *cursor).await?,
+                Ok(Event::Revoked(id)) if id == device_id => return close(sender, CLOSE_REVOKED, "revoked").await,
                 Ok(_) => {}
-                Err(RecvError::Lagged(_)) => cursor = backfill(state, &mut sender, &vault, cursor).await?,
+                Err(RecvError::Lagged(_)) => *cursor = backfill(state, sender, vault, *cursor).await?,
                 Err(RecvError::Closed) => return Ok(()),
             },
             _ = ping.tick() => {
                 sender.send(Message::Ping(Default::default())).await?;
                 // Also catches revocations made with the admin command, which cannot reach this process.
-                let device = device_id.clone();
+                let device = device_id.to_owned();
                 let active: bool = state
                     .db
                     .call(move |c| c.query_row("SELECT revoked = 0 FROM devices WHERE id = ?1", [device], |r| r.get(0)))
                     .await?;
                 if !active {
-                    return close(&mut sender, CLOSE_REVOKED, "revoked").await;
+                    return close(sender, CLOSE_REVOKED, "revoked").await;
                 }
             }
         }
@@ -160,7 +179,7 @@ async fn backfill(state: &AppState, sender: &mut Sender, vault: &str, mut cursor
         let more = items.len() as i64 > PAGE;
         items.truncate(PAGE as usize);
         cursor = items.last().map_or(cursor, |change| change.seq);
-        send(sender, &ServerMessage::Changes { items, up_to: cursor, more }).await?;
+        send(sender, &ServerMessage::Changes { after: from, items, up_to: cursor, more }).await?;
         if !more {
             return Ok(cursor);
         }

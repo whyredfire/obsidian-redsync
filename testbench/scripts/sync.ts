@@ -154,6 +154,19 @@ const skipped = await run<boolean>(b, `return plugin.logLines.some((line) => lin
 if (!skipped) failures++;
 console.log(`${skipped ? "PASS" : "FAIL"} B skips the lost note with a notice`);
 
+// The server thins out history while B is away, so the change log skips seqs: B still catches up.
+const versionOnA = (path: string) => run<number>(a, "return plugin.engine.state.get(arg)?.version ?? 0;", path);
+execFileSync("docker", ["network", "disconnect", "redsync-testbench_sync", "redsync-testbench-obsidian-b-1"]);
+for (const [i, text] of ["one", "two", "three"].entries()) {
+    await run(a, `const f = app.vault.getFileByPath("Thinned.md"); f ? await app.vault.modify(f, arg) : await app.vault.create("Thinned.md", arg);`, text);
+    await waitUntil(`A uploads version ${i + 1} of a note`, async () => (await versionOnA("Thinned.md")) === i + 1, LIMIT_MS);
+}
+const thinnedPath = await run<string>(a, "return await plugin.engine.codec.pathId(arg);", "Thinned.md");
+const thin = `DELETE FROM versions WHERE vault_id = '${vaultId}' AND path_id = '${thinnedPath}' AND version < 3`;
+execFileSync("docker", ["run", "--rm", "-v", "redsync-testbench_server:/data", "alpine", "sh", "-c", 'apk add -q sqlite > /dev/null && sqlite3 /data/redsync.db "$0"', thin]);
+execFileSync("docker", ["network", "connect", "redsync-testbench_sync", "redsync-testbench-obsidian-b-1"]);
+await waitUntil("after its history was thinned, the note's last version reaches B", async () => (await read(b, "Thinned.md")) === "three", 40_000);
+
 // Folders: an empty one, created, renamed, and deleted on A; and one deleted with a note in it.
 const folderOn = (page: Page, path: string) => run<boolean>(page, "return app.vault.getFolderByPath(arg) !== null;", path);
 await run(a, `await app.vault.createFolder("Empty");`);

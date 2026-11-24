@@ -321,25 +321,85 @@ async fn stored_blobs_are_served_under_a_lowered_limit_and_lost_ones_are_not_fou
 }
 
 #[tokio::test]
-async fn versions_are_deleted_once_past_the_change_log() {
+async fn unused_blobs_are_deleted_unless_a_snapshot_names_them() {
     let bench = bench().await;
     let laptop = bench.new_vault("me").await;
     let vault = laptop.vault.id.clone();
-    for (blob, bytes) in [("old", &b"old"[..]), ("new", b"new"), ("unused", b"never committed")] {
-        bench.put_blob(&laptop, blob, bytes).await;
+    for blob in ["snapshotted", "typed", "current", "unused"] {
+        bench.put_blob(&laptop, blob, blob.as_bytes()).await;
     }
-    bench.commit(&laptop, "r1", vec![op("note.md", 0, Some("old"))]).await;
-    bench.commit(&laptop, "r2", vec![op("note.md", 1, Some("new"))]).await;
+    bench.commit(&laptop, "r1", vec![op("note.md", 0, Some("snapshotted"))]).await;
+    snapshots::run(&bench.state).await.unwrap();
+    bench.commit(&laptop, "r2", vec![op("note.md", 1, Some("typed"))]).await;
+    bench.commit(&laptop, "r3", vec![op("note.md", 2, Some("current"))]).await;
     blobs::upload_pending(&bench.state).await.unwrap();
 
-    let day = 86_400_000;
+    let (hour, day) = (3_600_000, 86_400_000);
     let now = db::now_ms();
-    assert_eq!(blobs::collect_garbage(&bench.state, now + day).await.unwrap(), 0, "the history keeps them");
-    assert_eq!(blobs::collect_garbage(&bench.state, now + 31 * day).await.unwrap(), 2);
-    assert_eq!(bench.get_blob(&laptop, "old").await.0, StatusCode::NOT_FOUND);
-    assert!(bench.store.get(&blobs::object_path(&vault, "old")).await.is_err());
+    assert_eq!(blobs::collect_garbage(&bench.state, now + 2 * hour).await.unwrap(), 1, "only the unused one: the history names the others");
+    assert_eq!(bench.state.db.call(move |c| sync::thin_history(c, now + hour)).await.unwrap(), 2);
+    assert_eq!(blobs::collect_garbage(&bench.state, now + 2 * hour).await.unwrap(), 1, "the typed one; the snapshot names the other");
+    assert_eq!(bench.get_blob(&laptop, "typed").await.0, StatusCode::NOT_FOUND);
+    assert!(bench.store.get(&blobs::object_path(&vault, "typed")).await.is_err());
     assert!(!blobs::cache_path(&bench.state, &vault, "unused").exists());
-    assert_eq!(bench.get_blob(&laptop, "new").await, (StatusCode::OK, b"new".to_vec()));
+    assert_eq!(blobs::collect_garbage(&bench.state, now + 31 * day).await.unwrap(), 1, "the snapshot is gone by then");
+    assert_eq!(bench.get_blob(&laptop, "current").await, (StatusCode::OK, b"current".to_vec()));
+}
+
+#[tokio::test]
+async fn old_history_keeps_one_version_per_device_and_ten_minutes() {
+    let bench = bench().await;
+    let laptop = bench.new_vault("me").await;
+    let phone = bench.join(&laptop, "Phone").await;
+    for blob in ["a", "b", "c", "d", "e", "f"] {
+        bench.put_blob(&laptop, blob, blob.as_bytes()).await;
+    }
+    let edits = [
+        (&laptop, "a", 0),  // seq 1: typed over in the same ten minutes
+        (&laptop, "b", 1),  // seq 2: the phone last saw this one
+        (&laptop, "c", 2),  // seq 3: the last of its ten minutes
+        (&laptop, "d", 11), // seq 4: typed over
+        (&laptop, "e", 12), // seq 5: before the phone's edit
+        (&phone, "f", 13),  // seq 6: current
+    ];
+    for (i, (device, blob, _)) in edits.iter().enumerate() {
+        bench.commit(device, &format!("n{i}"), vec![op("note.md", i as i64, Some(blob))]).await;
+    }
+    let edits_then_delete = [(&laptop, Some("a"), 7), (&laptop, None, 7)];
+    for (i, (device, blob, _)) in edits_then_delete.iter().enumerate() {
+        bench.commit(device, &format!("g{i}"), vec![op("gone.md", i as i64, *blob)]).await;
+    }
+
+    // Two hours ago, at these minutes; the phone was last connected at seq 2.
+    let minute = 60_000;
+    let start = (db::now_ms() - 2 * 3_600_000) / (10 * minute) * (10 * minute);
+    let minutes: Vec<i64> = edits.iter().map(|e| e.2).chain(edits_then_delete.iter().map(|e| e.2)).collect();
+    let phone_id = phone.device_id.clone();
+    let remaining: Vec<i64> = bench
+        .state
+        .db
+        .call(move |c| -> anyhow::Result<Vec<i64>> {
+            for (i, at) in minutes.iter().enumerate() {
+                c.execute("UPDATE versions SET created_at = ?1 WHERE seq = ?2", [start + at * minute, i as i64 + 1])?;
+            }
+            c.execute("UPDATE devices SET cursor_seq = 2 WHERE id = ?1", [&phone_id])?;
+            sync::thin_history(c, db::now_ms() - 3_600_000)?;
+            Ok(c.prepare("SELECT seq FROM versions ORDER BY seq")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(remaining, vec![2, 3, 5, 6, 7, 8]);
+
+    // A device that last saw seq 1 catches up from the rest, without being made to compare everything.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let app = bench.app.clone();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let epoch = laptop.vault.epoch.clone();
+    let mut socket = connect(&address, &phone, Some(&epoch), 1).await;
+    assert!(matches!(next(&mut socket).await, Ok(ServerMessage::Welcome { .. })));
+    let Ok(ServerMessage::Changes { after: 1, up_to: 8, items, .. }) = next(&mut socket).await else { panic!("no catch-up") };
+    assert_eq!(items.iter().map(|c| c.seq).collect::<Vec<_>>(), vec![2, 3, 5, 6, 7, 8]);
 }
 
 #[test]

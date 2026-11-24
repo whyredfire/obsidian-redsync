@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// 2: folders are entries of their own, their path ending in "/"; devices speaking 1 would take them for files.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// 3: the change log skips seqs once history is thinned, so Changes says which seq it follows.
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// A message from a device over the WebSocket.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
@@ -39,7 +40,10 @@ pub enum ServerMessage {
         head_seq: i64,
         device_id: String,
     },
+    /// Every change after `after` up to `up_to`; the seqs in between may skip.
     Changes {
+        #[ts(type = "number")]
+        after: i64,
         items: Vec<Change>,
         #[ts(type = "number")]
         up_to: i64,

@@ -92,8 +92,13 @@ pub async fn run(state: &AppState) -> Result<usize> {
     Ok(due.len())
 }
 
+/// Also marks the blobs it names, which are then kept as long as the snapshot (collect_garbage).
 fn read_snapshot(c: &Connection, vault_id: &str, now: i64) -> Result<Snapshot> {
     let listing = sync::listing(c, vault_id)?;
+    c.execute(
+        "UPDATE blobs SET snapshot_at = ?1 WHERE vault_id = ?2 AND blob_id IN (SELECT blob_id FROM files WHERE vault_id = ?2)",
+        params![now, vault_id],
+    )?;
     let vault = c.query_row(
         "SELECT id, user_id, name, created_at, encrypted, kdf_salt, key_check FROM vaults WHERE id = ?1",
         [vault_id],
@@ -184,8 +189,8 @@ pub async fn restore(config: &Config, store: &dyn ObjectStore) -> Result<String>
         )?;
         let vault = &snapshot.vault;
         tx.execute(
-            "INSERT INTO vaults(id, user_id, name, created_at, epoch, head_seq, snapshot_seq, encrypted, kdf_salt, key_check)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9)",
+            "INSERT INTO vaults(id, user_id, name, created_at, epoch, head_seq, snapshot_seq, pruned_seq, encrypted, kdf_salt, key_check)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6, ?7, ?8, ?9)",
             params![vault.id, vault.user_id, vault.name, vault.created_at, random_id(), vault.seq, vault.encrypted, vault.kdf_salt, vault.key_check],
         )?;
         for device in &snapshot.devices {
@@ -206,7 +211,7 @@ pub async fn restore(config: &Config, store: &dyn ObjectStore) -> Result<String>
         }
         for blob in &blobs {
             tx.execute(
-                "INSERT INTO blobs(vault_id, blob_id, size, created_at, in_r2, cached, last_access, released_at) VALUES(?1, ?2, ?3, ?4, 1, 0, ?4, ?4)",
+                "INSERT INTO blobs(vault_id, blob_id, size, created_at, in_r2, cached, last_access, snapshot_at) VALUES(?1, ?2, ?3, ?4, 1, 0, ?4, ?4)",
                 params![vault.id, blob.location.filename(), blob.size as i64, now],
             )?;
         }

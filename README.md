@@ -12,7 +12,7 @@ Red Sync is a self-hosted alternative to a sync subscription. Changes appear on 
 - **Live sync**: uploads as you type; edits from other devices arrive in open notes, and your cursor stays with your text.
 - **Merges instead of conflicts**: edits to the same note on two devices are combined. When they cannot be, the other version is kept as a conflicted copy, never thrown away.
 - **End-to-end encryption**: optional, chosen per vault. File contents, names, and metadata are encrypted on the device.
-- **File history**: look at or restore any version of a file from the last 30 days.
+- **File history**: look at or restore earlier versions of a file: every save from the last hour, then one per 10 minutes of editing, for 30 days.
 - **Easy setup for new devices**: scan a QR code; the new device joins with the passphrase, nothing to type.
 - **Desktop and mobile**: Windows, macOS, Linux, iOS, and Android.
 - **Safe by default**: a vault folder that suddenly looks empty is not passed on as hundreds of deletions; files too large for the server stay on the device instead of blocking the rest.
@@ -36,7 +36,7 @@ That is all. The status bar shows 'Synchronised', 'Synchronising', or 'Offline' 
 
 ## Usage
 
-- **History**: run **Show this file's history** from the command palette, or select **Red Sync history** in a file's menu. Each version shows when it was saved and on which device; **Show** opens it, **Restore** puts it back (as a new version, so nothing is lost).
+- **History**: run **Show this file's history** from the command palette, or select **Red Sync history** in a file's menu. The last hour keeps every save; older history keeps one version per 10 minutes of editing on each device, for 30 days. Each version shows when it was saved and on which device; **Show** opens it, **Restore** puts it back (as a new version, so nothing is lost).
 - **Conflicted copies**: when two devices changed the same lines, the newer version stays and the other is saved next to it as 'Note (Conflicted copy 202611241430).md'.
 - **Devices**: **Settings → Red Sync** lists your devices and when each was last seen. Disconnect a lost phone there; it stops at once.
 - **Pause sync** and **Silence notifications** are per device.

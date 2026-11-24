@@ -391,7 +391,7 @@ async fn put_blob(
             }
             let now = now_ms();
             tx.execute(
-                "INSERT INTO blobs(vault_id, blob_id, size, created_at, last_access, released_at) VALUES(?1, ?2, ?3, ?4, ?4, ?4)",
+                "INSERT INTO blobs(vault_id, blob_id, size, created_at, last_access) VALUES(?1, ?2, ?3, ?4, ?4)",
                 params![vault_id, blob_id, size, now],
             )?;
             tx.commit()?;

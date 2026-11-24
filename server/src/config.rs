@@ -19,6 +19,10 @@ pub const HISTORY_TTL_MS: i64 = 7 * DAY_MS;
 /// Current versions above PIN_MAX_BYTES leave the cache after this long unread.
 pub const LARGE_TTL_MS: i64 = 14 * DAY_MS;
 pub const LOG_TTL_MS: i64 = 30 * DAY_MS;
+/// History younger than this keeps every version…
+pub const HISTORY_DETAIL_MS: i64 = 3_600_000;
+/// …older history one per device and file in each step of this length.
+pub const HISTORY_STEP_MS: i64 = 10 * 60_000;
 pub const TOMBSTONE_TTL_MS: i64 = 365 * DAY_MS;
 pub const REMOVED_USER_GRACE_MS: i64 = 30 * DAY_MS;
 pub const REQUEST_TTL_MS: i64 = DAY_MS;

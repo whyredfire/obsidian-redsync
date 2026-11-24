@@ -3,10 +3,11 @@ import DiffMatchPatch from "diff-match-patch";
 import type { Codec, Meta } from "./codec";
 import { type Account, Server, ServerError, Socket } from "./connection";
 import { conflictedCopyPath, isText, mergeFile, toData, toText } from "./merge";
-import type { Change } from "./protocol/Change";
 import type { CommitOp } from "./protocol/CommitOp";
 import type { CommitResult } from "./protocol/CommitResult";
+import type { Change } from "./protocol/Change";
 import type { FileEntry } from "./protocol/FileEntry";
+import type { ServerMessage } from "./protocol/ServerMessage";
 import type { VersionEntry } from "./protocol/VersionEntry";
 import type { LocalState } from "./state";
 
@@ -23,6 +24,8 @@ const PARALLEL_UPLOADS = 6;
 
 /** Folders are synchronised as entries of their own, their path ending in "/", so empty ones reach other devices too. */
 const isFolder = (path: string) => path.endsWith("/");
+
+type Changes = Extract<ServerMessage, { type: "changes" }>;
 
 export type Status =
     | { state: "synced" | "syncing" | "offline"; pending: number }
@@ -77,7 +80,7 @@ export class SyncEngine {
     /** When each open note was last typed in. */
     private lastTyped = new Map<string, number>();
     /** Changes received and not yet applied. */
-    private incoming: Change[] = [];
+    private incoming: Changes[] = [];
     /** Files the server refused as too large, by path, with the mtime and size they had: not offered again until they change. */
     private tooLarge = new Map<string, string>();
     /** The notice that storage on the server is full was shown; once per start is enough. */
@@ -112,7 +115,7 @@ export class SyncEngine {
                     case "changes":
                         // Changes arrive one message per commit; collect them so a burst is applied as one batch.
                         if (this.incoming.length === 0) this.enqueue(() => this.applyChanges(this.incoming.splice(0)));
-                        this.incoming.push(...message.items);
+                        this.incoming.push(message);
                         break;
                     case "reset":
                         this.hooks.log("The server's history changed; comparing every file with it.");
@@ -361,25 +364,33 @@ export class SyncEngine {
 
     // Remote changes.
 
-    private async applyChanges(changes: Change[]): Promise<void> {
-        const todo = changes.filter((change) => change.seq > this.state.cursor.seq && change.deviceId !== this.account.deviceId);
+    private async applyChanges(messages: Changes[]): Promise<void> {
+        const changes = messages.flatMap((message) => message.items);
+        // Only the last change to a path in a burst is applied: downloading the versions before it would be wasted.
+        const last = new Map(changes.map((change) => [change.pathId, change.seq]));
+        const todo = changes.filter(
+            (change) => change.seq > this.state.cursor.seq && change.deviceId !== this.account.deviceId && last.get(change.pathId) === change.seq,
+        );
         let next = 0;
         let applied = this.state.cursor.seq;
         try {
-            for (const change of changes) {
-                if (change.seq <= applied) continue;
-                if (change.seq !== applied + 1) {
-                    // A change is missing (an earlier one failed): have the server send everything after the cursor again.
+            for (const message of messages) {
+                if (message.upTo <= applied) continue;
+                if (message.after > applied) {
+                    // Changes are missing (an earlier batch failed): have the server send everything after the cursor again.
                     this.socket.restart();
                     return;
                 }
-                if (change.deviceId !== this.account.deviceId) {
-                    this.prefetch(todo.slice(next, next + PARALLEL_UPLOADS).map((c) => c.blobId));
-                    next++;
-                    await this.applyChange(change);
-                    if (change.blobId) this.prefetched.delete(change.blobId);
+                for (const change of message.items) {
+                    if (change === todo[next]) {
+                        this.prefetch(todo.slice(next, next + PARALLEL_UPLOADS).map((c) => c.blobId));
+                        next++;
+                        await this.applyChange(change);
+                        if (change.blobId) this.prefetched.delete(change.blobId);
+                    }
+                    applied = Math.max(applied, change.seq);
                 }
-                applied = change.seq;
+                applied = message.upTo;
             }
         } catch (error) {
             this.socket.restart();
@@ -501,8 +512,9 @@ export class SyncEngine {
         }
         const theirs = await this.download(remote.blobId);
         const theirsMeta = await this.codec.decodeMeta(remote.meta);
-        if (isText(path) && baseBlob !== null) {
-            const merged = await this.mergeText(path, toText(await this.download(baseBlob)), toText(theirs));
+        const base = isText(path) && baseBlob !== null ? await this.downloadBase(baseBlob) : null;
+        if (base !== null) {
+            const merged = await this.mergeText(path, toText(base), toText(theirs));
             if (merged !== null) {
                 await this.remember(path, remote.version, remote.blobId);
                 if (merged !== toText(theirs)) this.waiting.add(path);
@@ -619,6 +631,16 @@ export class SyncEngine {
         const ahead = this.prefetched.get(blobId);
         this.prefetched.delete(blobId);
         return ahead ?? this.fetchBlob(blobId);
+    }
+
+    /** The version both sides started from; null when the server no longer has it, and both versions are then kept. */
+    private async downloadBase(blobId: string): Promise<ArrayBuffer | null> {
+        try {
+            return await this.download(blobId);
+        } catch (error) {
+            if (error instanceof ServerError && error.status === 404) return null;
+            throw error;
+        }
     }
 
     /** Starts downloading the files applied next, so a few download while one is written. */

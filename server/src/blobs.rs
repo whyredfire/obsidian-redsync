@@ -11,10 +11,10 @@ use object_store::{ObjectStoreExt, PutPayload};
 use rusqlite::params;
 use tokio::io::AsyncWriteExt;
 
-use crate::AppState;
+use crate::{AppState, sync};
 use crate::api::{ApiError, ApiResult};
 use crate::config::{
-    HISTORY_TTL_MS, LARGE_TTL_MS, LOG_TTL_MS, PIN_MAX_BYTES, REMOVED_USER_GRACE_MS, REQUEST_TTL_MS, TOMBSTONE_TTL_MS,
+    HISTORY_DETAIL_MS, HISTORY_TTL_MS, LARGE_TTL_MS, LOG_TTL_MS, PIN_MAX_BYTES, REMOVED_USER_GRACE_MS, REQUEST_TTL_MS, TOMBSTONE_TTL_MS,
 };
 use crate::db::{now_ms, random_id};
 
@@ -196,37 +196,43 @@ pub async fn maintenance(state: &AppState) -> Result<()> {
     flush_touched(state).await?;
     evict(state).await?;
     let now = now_ms();
-    state
+    let thinned = state
         .db
-        .call(move |c| -> rusqlite::Result<()> {
+        .call(move |c| -> Result<usize> {
+            c.execute(
+                "UPDATE vaults SET pruned_seq = MAX(pruned_seq, COALESCE((SELECT MAX(seq) FROM versions WHERE vault_id = vaults.id AND created_at < ?1), 0))",
+                [now - LOG_TTL_MS],
+            )?;
             c.execute("DELETE FROM versions WHERE created_at < ?1", [now - LOG_TTL_MS])?;
+            let thinned = sync::thin_history(c, now - HISTORY_DETAIL_MS)?;
             c.execute("DELETE FROM files WHERE blob_id IS NULL AND updated_at < ?1", [now - TOMBSTONE_TTL_MS])?;
             c.execute("DELETE FROM requests WHERE created_at < ?1", [now - REQUEST_TTL_MS])?;
             c.execute("DELETE FROM invites WHERE used = 1 OR expires_at < ?1", [now])?;
             c.execute("DELETE FROM enrolments WHERE used = 1 OR expires_at < ?1", [now])?;
-            Ok(())
+            Ok(thinned)
         })
         .await?;
     let collected = collect_garbage(state, now).await?;
-    if collected > 0 {
-        tracing::info!("deleted {collected} old versions");
+    if thinned + collected > 0 {
+        tracing::info!("history thinned by {thinned} versions; {collected} unused blobs deleted");
     }
     purge_removed_users(state, now).await
 }
 
-/// Deletes the blobs no file has used for LOG_TTL_MS: the change log and every snapshot kept are younger.
+/// Deletes the blobs nothing uses: no file's current version, no version in the history, and no snapshot kept
+/// (snapshots are kept LOG_TTL_MS). Blobs uploaded within HISTORY_DETAIL_MS stay, as their commit may follow.
 /// Returns how many. The rows go first, so a commit that uses a blob again meanwhile uploads it again.
 pub async fn collect_garbage(state: &AppState, now: i64) -> Result<usize> {
-    let cutoff = now - LOG_TTL_MS;
     let garbage = state
         .db
         .call(move |c| {
             c.prepare(
-                "DELETE FROM blobs WHERE released_at < ?1
+                "DELETE FROM blobs WHERE created_at < ?1 AND (snapshot_at IS NULL OR snapshot_at < ?2)
                    AND NOT EXISTS(SELECT 1 FROM files f WHERE f.vault_id = blobs.vault_id AND f.blob_id = blobs.blob_id)
+                   AND NOT EXISTS(SELECT 1 FROM versions v WHERE v.vault_id = blobs.vault_id AND v.blob_id = blobs.blob_id)
                  RETURNING vault_id, blob_id",
             )?
-            .query_map([cutoff], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .query_map([now - HISTORY_DETAIL_MS, now - LOG_TTL_MS], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()
         })
         .await?;

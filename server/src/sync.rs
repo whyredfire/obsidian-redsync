@@ -3,6 +3,7 @@
 use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::config::HISTORY_STEP_MS;
 use crate::db::{now_ms, valid_blob_id};
 use crate::protocol::{Change, CommitOp, CommitResult, FileEntry, Listing};
 
@@ -92,12 +93,6 @@ pub fn commit(
                meta = excluded.meta, updated_at = excluded.updated_at",
             params![vault_id, op.path_id, version, head, op.blob_id, op.meta, now],
         )?;
-        if let Some(released) = &blob_id {
-            tx.execute(
-                "UPDATE blobs SET released_at = ?1 WHERE vault_id = ?2 AND blob_id = ?3",
-                params![now, vault_id, released],
-            )?;
-        }
         results.push(CommitResult::Ok { version, seq: head });
         changes.push(Change {
             seq: head,
@@ -133,13 +128,36 @@ pub fn changes_since(connection: &Connection, vault_id: &str, since: i64, limit:
 /// The vault's epoch and head, and whether a device at (`epoch`, `since`) must reconcile from the
 /// listing instead of catching up from the change log.
 pub fn catch_up_state(connection: &Connection, vault_id: &str, epoch: Option<&str>, since: i64) -> Result<(String, i64, bool)> {
-    let (vault_epoch, head): (String, i64) =
-        connection.query_row("SELECT epoch, head_seq FROM vaults WHERE id = ?1", [vault_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    let oldest: Option<i64> = connection.query_row("SELECT MIN(seq) FROM versions WHERE vault_id = ?1", [vault_id], |r| r.get(0))?;
+    let (vault_epoch, head, pruned): (String, i64, i64) = connection.query_row(
+        "SELECT epoch, head_seq, pruned_seq FROM vaults WHERE id = ?1",
+        [vault_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
     let other_history = epoch.is_some_and(|e| e != vault_epoch);
     let ahead = since > head || since < 0;
-    let log_pruned = since < head && oldest.is_none_or(|oldest| oldest > since + 1);
-    Ok((vault_epoch, head, other_history || ahead || log_pruned))
+    Ok((vault_epoch, head, other_history || ahead || since < pruned))
+}
+
+/// Thins out the history older than `before`: of one device's edits to a file, only the last in each HISTORY_STEP_MS
+/// is kept, and always deletions, the version before a deletion or before another device's edit, and the version
+/// each device last saw, which it merges its own edits against. The newest version of a file always stays, so the
+/// log still leads every device to the current state. Returns how many versions were removed.
+pub fn thin_history(connection: &Connection, before: i64) -> Result<usize> {
+    Ok(connection.execute(
+        "DELETE FROM versions WHERE (vault_id, seq) IN (
+           SELECT vault_id, seq FROM (
+             SELECT vault_id, seq, blob_id, device_id, created_at,
+               LEAD(seq) OVER w AS next_seq, LEAD(blob_id) OVER w AS next_blob,
+               LEAD(device_id) OVER w AS next_device, LEAD(created_at) OVER w AS next_at
+             FROM versions WINDOW w AS (PARTITION BY vault_id, path_id ORDER BY seq)
+           ) AS v
+           WHERE v.created_at < ?1 AND v.blob_id IS NOT NULL AND v.next_blob IS NOT NULL
+             AND v.next_device = v.device_id AND v.next_at / ?2 = v.created_at / ?2
+             AND NOT EXISTS(SELECT 1 FROM devices d WHERE d.vault_id = v.vault_id AND d.revoked = 0
+                              AND d.cursor_seq >= v.seq AND d.cursor_seq < v.next_seq)
+         )",
+        params![before, HISTORY_STEP_MS],
+    )?)
 }
 
 pub fn listing(connection: &Connection, vault_id: &str) -> Result<Listing> {

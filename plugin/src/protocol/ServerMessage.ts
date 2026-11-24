@@ -5,4 +5,4 @@ import type { CommitResult } from "./CommitResult";
 /**
  * A message from the server over the WebSocket.
  */
-export type ServerMessage = { "type": "welcome", epoch: string, headSeq: number, deviceId: string, } | { "type": "changes", items: Array<Change>, upTo: number, more: boolean, } | { "type": "reset", epoch: string, } | { "type": "result", req: string, results: Array<CommitResult>, } | { "type": "pong" };
+export type ServerMessage = { "type": "welcome", epoch: string, headSeq: number, deviceId: string, } | { "type": "changes", after: number, items: Array<Change>, upTo: number, more: boolean, } | { "type": "reset", epoch: string, } | { "type": "result", req: string, results: Array<CommitResult>, } | { "type": "pong" };
