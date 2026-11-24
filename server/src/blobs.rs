@@ -38,7 +38,12 @@ pub async fn exists(state: &AppState, vault: &str, blob: &str) -> Result<bool> {
 }
 
 /// Writes `bytes` to `target` through a temporary file, so a crash never leaves half a blob.
-async fn write_atomically(state: &AppState, target: &PathBuf, mut chunks: impl futures_util::Stream<Item = ApiResult<bytes::Bytes>> + Unpin) -> ApiResult<i64> {
+async fn write_atomically(
+    state: &AppState,
+    target: &PathBuf,
+    mut chunks: impl futures_util::Stream<Item = ApiResult<bytes::Bytes>> + Unpin,
+    limit: i64,
+) -> ApiResult<i64> {
     let temporary = state.config.data_dir.join("tmp").join(random_id());
     let result = async {
         tokio::fs::create_dir_all(temporary.parent().unwrap()).await?;
@@ -47,7 +52,7 @@ async fn write_atomically(state: &AppState, target: &PathBuf, mut chunks: impl f
         while let Some(chunk) = chunks.next().await {
             let chunk = chunk?;
             size += chunk.len() as i64;
-            if size > state.config.max_file_bytes {
+            if size > limit {
                 return Err(ApiError::TooLarge);
             }
             file.write_all(&chunk).await?;
@@ -67,7 +72,7 @@ async fn write_atomically(state: &AppState, target: &PathBuf, mut chunks: impl f
 /// Streams an upload into the cache and returns its size.
 pub async fn receive(state: &AppState, vault: &str, blob: &str, body: Body) -> ApiResult<i64> {
     let chunks = body.into_data_stream().map_err(|error| ApiError::Internal(error.into()));
-    write_atomically(state, &cache_path(state, vault, blob), chunks).await
+    write_atomically(state, &cache_path(state, vault, blob), chunks, state.config.max_file_bytes).await
 }
 
 /// Removes a received blob that was refused, unless another upload of it was accepted meanwhile.
@@ -83,8 +88,16 @@ pub async fn ensure_cached(state: &AppState, vault: &str, blob: &str) -> ApiResu
     if tokio::fs::try_exists(&path).await? {
         return Ok(path);
     }
-    let stream = state.store.get(&object_path(vault, blob)).await?.into_stream().map_err(|error| ApiError::Internal(error.into()));
-    write_atomically(state, &path, stream).await?;
+    let stream = match state.store.get(&object_path(vault, blob)).await {
+        Ok(object) => object.into_stream().map_err(|error| ApiError::Internal(error.into())),
+        Err(object_store::Error::NotFound { .. }) => {
+            tracing::error!("blob {blob} of vault {vault} is in neither the cache nor the object store");
+            return Err(ApiError::NotFound);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    // No size limit: it was checked on upload, and a limit lowered since must not hide what is stored.
+    write_atomically(state, &path, stream, i64::MAX).await?;
     let (vault, blob) = (vault.to_owned(), blob.to_owned());
     state
         .db

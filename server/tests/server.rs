@@ -296,6 +296,30 @@ async fn blobs_go_to_the_store_and_come_back_after_eviction() {
     assert!(blobs::cache_path(&bench.state, &laptop.vault.id, "old").exists());
 }
 
+#[tokio::test]
+async fn stored_blobs_are_served_under_a_lowered_limit_and_lost_ones_are_not_found() {
+    let bench = bench().await;
+    let laptop = bench.new_vault("me").await;
+    let vault = laptop.vault.id.clone();
+    bench.put_blob(&laptop, "large", &[1; 2000]).await;
+    bench.put_blob(&laptop, "lost", b"lost").await;
+    blobs::upload_pending(&bench.state).await.unwrap();
+    for blob in ["large", "lost"] {
+        std::fs::remove_file(blobs::cache_path(&bench.state, &vault, blob)).unwrap();
+    }
+    bench.store.delete(&blobs::object_path(&vault, "lost")).await.unwrap();
+
+    // The same data, served with a limit lowered after the upload.
+    let state = State::new(
+        Config { max_file_bytes: 1000, ..config(bench.dir.path()) },
+        db::Db::open(&bench.dir.path().join("redsync.db")).unwrap(),
+        bench.store.clone(),
+    );
+    let lowered = Bench { app: router(state.clone()), state, store: bench.store.clone(), dir: tempfile::tempdir().unwrap() };
+    assert_eq!(lowered.get_blob(&laptop, "large").await, (StatusCode::OK, vec![1; 2000]));
+    assert_eq!(lowered.get_blob(&laptop, "lost").await.0, StatusCode::NOT_FOUND);
+}
+
 #[test]
 fn eviction_keeps_pinned_and_unsaved_blobs() {
     use redsync_server::blobs::{CachedBlob, choose_victims};

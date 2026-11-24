@@ -391,12 +391,27 @@ export class SyncEngine {
         const local = await this.readLocal(path);
         const localId = local ? await this.codec.blobId(local.data) : null;
         this.hooks.debug(`Change ${change.seq}: ${path} version ${change.version} (${short(change.blobId)}); here version ${entry?.version} (${short(entry?.blobId)}), file ${short(localId)}.`);
-        if (localId === change.blobId) {
-            await this.remember(path, change.version, change.blobId);
-        } else if ((entry?.blobId ?? null) === localId) {
-            await this.takeRemote(path, change, local);
-        } else {
-            await this.resolve(path, entry?.blobId ?? null, local, change);
+        await this.unlessUnavailable(path, async () => {
+            if (localId === change.blobId) {
+                await this.remember(path, change.version, change.blobId);
+            } else if ((entry?.blobId ?? null) === localId) {
+                await this.takeRemote(path, change, local);
+            } else {
+                await this.resolve(path, entry?.blobId ?? null, local, change);
+            }
+        });
+    }
+
+    /**
+     * A file the server cannot send (lost, or over a limit lowered since it was stored) is skipped with a notice
+     * rather than holding up every change after it; 'Check everything again' tries it again.
+     */
+    private async unlessUnavailable(path: string, work: () => Promise<void>): Promise<void> {
+        try {
+            await work();
+        } catch (error) {
+            if (!(error instanceof ServerError && (error.status === 404 || error.status === 413))) throw error;
+            this.hooks.notice(`Red Sync: ${path} cannot be downloaded from the server (${error.message}), so it was skipped. To try again, select 'Check everything again' in Red Sync's settings.`);
         }
     }
 
@@ -524,14 +539,14 @@ export class SyncEngine {
             } else if (!local && entry?.blobId && entry.blobId === file.blobId) {
                 deletedHere.push([path, file]);
             } else if (!local || (entry !== undefined && entry.blobId === localId)) {
-                await this.takeRemote(path, file, local);
+                await this.unlessUnavailable(path, () => this.takeRemote(path, file, local));
             } else {
-                await this.resolve(path, entry?.blobId ?? null, local, file);
+                await this.unlessUnavailable(path, () => this.resolve(path, entry?.blobId ?? null, local, file));
             }
         }
         if (this.massDeletion(deletedHere.length)) {
             this.hooks.notice(`Red Sync: ${deletedHere.length} files missing from this vault were brought back from the server rather than deleted everywhere.`);
-            for (const [path, file] of deletedHere) await this.takeRemote(path, file, null);
+            for (const [path, file] of deletedHere) await this.unlessUnavailable(path, () => this.takeRemote(path, file, null));
         } else {
             // Deleted here since the last sync: pass the deletions on.
             for (const [path, file] of deletedHere) {

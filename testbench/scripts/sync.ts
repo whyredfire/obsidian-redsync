@@ -137,6 +137,23 @@ await waitUntil(
     40_000,
 );
 
+// A file the server has lost is skipped on B, and the changes after it still arrive.
+const entryOnA = (path: string) => run<string | null>(a, "return plugin.engine.state.get(arg)?.blobId ?? null;", path);
+execFileSync("docker", ["network", "disconnect", "redsync-testbench_sync", "redsync-testbench-obsidian-b-1"]);
+await run(a, `await app.vault.create("Lost.md", "lost on the server");`);
+await waitUntil("A uploads a note the server will lose", async () => (await entryOnA("Lost.md")) !== null, LIMIT_MS);
+await run(a, `await app.vault.create("After lost.md", "x");`);
+await waitUntil("A uploads a note after it", async () => (await entryOnA("After lost.md")) !== null, LIMIT_MS);
+const vaultId = await run<string>(a, "return plugin.deviceSettings.vaultId;");
+const lost = (await entryOnA("Lost.md"))!;
+await sleep(1000);
+execFileSync("docker", ["run", "--rm", "-v", "redsync-testbench_server:/data", "alpine", "rm", "-f", `/data/blobs/${vaultId}/${lost.slice(0, 2)}/${lost}`, `/data/r2/vaults/${vaultId}/blobs/${lost}`]);
+execFileSync("docker", ["network", "connect", "redsync-testbench_sync", "redsync-testbench-obsidian-b-1"]);
+await waitUntil("a note after a lost one still reaches B", async () => (await read(b, "After lost.md")) === "x", 40_000);
+const skipped = await run<boolean>(b, `return plugin.logLines.some((line) => line.includes("Lost.md cannot be downloaded"));`);
+if (!skipped) failures++;
+console.log(`${skipped ? "PASS" : "FAIL"} B skips the lost note with a notice`);
+
 // Folders: an empty one, created, renamed, and deleted on A; and one deleted with a note in it.
 const folderOn = (page: Page, path: string) => run<boolean>(page, "return app.vault.getFolderByPath(arg) !== null;", path);
 await run(a, `await app.vault.createFolder("Empty");`);
