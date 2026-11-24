@@ -4,7 +4,7 @@
 //
 //   node scripts/fuzz.ts [--seed 42] [--steps 150] [--safe]
 import type { Page } from "playwright-core";
-import { connectThroughApi, device, resetDevices, run, setOnline, sleep, snapshot, synced } from "./bench.ts";
+import { connectThroughApi, device, DEVTOOLS, resetDevices, run, setOnline, sleep, snapshot, synced } from "./bench.ts";
 
 const option = (name: string, fallback: number) => {
     const i = process.argv.indexOf(`--${name}`);
@@ -66,8 +66,8 @@ const RENAME = `
 
 const DELETE = `const file = app.vault.getFileByPath(arg); if (file) await app.fileManager.trashFile(file);`;
 
-const a = await device(9223);
-const b = await device(9224);
+const a = await device(DEVTOOLS.a);
+const b = await device(DEVTOOLS.b);
 const devices: [string, Page][] = [["A", a], ["B", b]];
 const written = new Set<string>();
 let offline = false;

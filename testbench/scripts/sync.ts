@@ -3,7 +3,7 @@
 // plug-in's own dialogues with end-to-end encryption, and the server is checked to hold nothing readable.
 import { execFileSync } from "node:child_process";
 import type { Page } from "playwright-core";
-import { compose, connectThroughApi, device, json, newInvite, read, resetDevices, run, SERVER, SERVER_FROM_DEVICES, sleep, synced } from "./bench.ts";
+import { compose, connectThroughApi, device, DEVTOOLS, json, newInvite, read, resetDevices, run, SERVER, SERVER_FROM_DEVICES, sleep, synced } from "./bench.ts";
 
 const LIMIT_MS = 3000;
 const ENCRYPTED = process.argv.includes("--encrypted");
@@ -27,8 +27,8 @@ async function waitUntil(what: string, check: () => Promise<boolean>, limitMs: n
     return -1;
 }
 
-const a = await device(9223);
-const b = await device(9224);
+const a = await device(DEVTOOLS.a);
+const b = await device(DEVTOOLS.b);
 
 // Fresh start: load the new build, disconnect, and empty both vaults.
 await resetDevices([a, b]);

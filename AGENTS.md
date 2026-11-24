@@ -36,4 +36,4 @@ cd testbench && docker compose exec server redsync-server user add <name>   # pr
 
 The server is configured by environment variables: `REDSYNC_DATA` (data folder), `REDSYNC_STORE` (`s3://bucket/prefix` with the standard `AWS_*` variables, or `file:///path`), `REDSYNC_CACHE_MAX`, `REDSYNC_MAX_FILE`, `REDSYNC_SNAPSHOT_HOURS`, `REDSYNC_LISTEN`. Fixed limits are in `server/src/config.rs`.
 
-Device A: https://localhost:3001 (DevTools port 9223). Device B: https://localhost:3002 (DevTools port 9224). Server: http://localhost:8080.
+Device A: https://localhost:47381 (DevTools port 47391). Device B: https://localhost:47382 (DevTools port 47392). Server: http://localhost:47380.

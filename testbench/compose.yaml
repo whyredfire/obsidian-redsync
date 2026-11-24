@@ -25,12 +25,12 @@ services:
     volumes:
       - server:/data
     networks: [sync]
-    ports: ["127.0.0.1:8080:8080"]
+    ports: ["127.0.0.1:47380:8080"]
 
   # Device A: vault on the container's case-sensitive file system.
   obsidian-a:
     <<: *obsidian
-    ports: ["127.0.0.1:3001:3001", "127.0.0.1:9223:9223"]
+    ports: ["127.0.0.1:47381:3001", "127.0.0.1:47391:9223"]
     volumes:
       - obsidian-a:/config
       - ../plugin/build:/config/vault/.obsidian/plugins/red-sync:ro
@@ -38,7 +38,7 @@ services:
   # Device B: vault in a folder on the Mac, case-insensitive like macOS.
   obsidian-b:
     <<: *obsidian
-    ports: ["127.0.0.1:3002:3001", "127.0.0.1:9224:9223"]
+    ports: ["127.0.0.1:47382:3001", "127.0.0.1:47392:9223"]
     volumes:
       - obsidian-b:/config
       - ./data/vault-b:/config/vault

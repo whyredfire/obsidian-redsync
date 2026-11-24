@@ -1,10 +1,10 @@
 // Enables Red Sync on both test devices and saves a screenshot of its settings page to out/.
 import { chromium, type Browser, type Page } from "playwright-core";
+import { DEVTOOLS } from "./bench.ts";
 
-const devices = { a: 9223, b: 9224 };
 let failed = false;
 
-for (const [name, port] of Object.entries(devices)) {
+for (const [name, port] of Object.entries(DEVTOOLS)) {
     const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     const page = browser.contexts().flatMap((context) => context.pages()).find((p) => p.url().includes("index.html"));
     if (!page) throw new Error(`device ${name}: no vault window open`);

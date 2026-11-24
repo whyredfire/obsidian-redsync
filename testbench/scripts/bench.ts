@@ -2,7 +2,9 @@
 import { execFileSync } from "node:child_process";
 import { chromium, type Page } from "playwright-core";
 
-export const SERVER = "http://127.0.0.1:8080";
+// Published on unusual ports on the host, out of the way of other projects.
+export const SERVER = "http://127.0.0.1:47380";
+export const DEVTOOLS = { a: 47391, b: 47392 };
 export const SERVER_FROM_DEVICES = "http://server:8080";
 export const B_CONTAINER = "redsync-testbench-obsidian-b-1";
 export const SYNC_NETWORK = "redsync-testbench_sync";

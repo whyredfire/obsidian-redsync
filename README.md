@@ -128,7 +128,7 @@ bun run fuzz -- --seed 7   # random use of both devices with network loss (--saf
 bun run drill              # the server loses its database and is restored from a snapshot
 ```
 
-Watch the test devices at https://localhost:3001 and https://localhost:3002.
+Watch the test devices at https://localhost:47381 and https://localhost:47382.
 
 Releases: run the 'release' workflow with a version such as `2.0.0`. It publishes the plug-in as a GitHub release and the server image to `ghcr.io/whyredfire/obsidian-redsync` (`2.0.0` and `latest`, for amd64 and arm64). The image is built before the plug-in is released, so a failed build stops the release.
 

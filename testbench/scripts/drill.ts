@@ -1,10 +1,10 @@
 // Restore drill: the server loses its database and cache, is rebuilt from the last snapshot, and the devices
 // put back what the snapshot missed.
 import { execFileSync } from "node:child_process";
-import { compose, connectThroughApi, device, read, resetDevices, run, sleep, snapshot, synced } from "./bench.ts";
+import { compose, connectThroughApi, device, DEVTOOLS, read, resetDevices, run, SERVER, sleep, snapshot, synced } from "./bench.ts";
 
-const a = await device(9223);
-const b = await device(9224);
+const a = await device(DEVTOOLS.a);
+const b = await device(DEVTOOLS.b);
 let failures = 0;
 const check = (ok: boolean, what: string) => {
     if (!ok) failures++;
@@ -52,7 +52,7 @@ check((await read(b, "After.md")) === "Written after the snapshot.", "the note w
 check((await read(a, "Before 1.md")) === "Edited on B after the snapshot.", "the edit made after the snapshot reached A");
 const settings = await run<{ vaultId: string }>(a, "return plugin.deviceSettings;");
 const token = await run<string>(a, "return plugin.token();");
-const listing = await (await fetch(`http://127.0.0.1:8080/v1/vaults/${settings.vaultId}/files`, { headers: { authorization: `Bearer ${token}` } })).json();
+const listing = await (await fetch(`${SERVER}/v1/vaults/${settings.vaultId}/files`, { headers: { authorization: `Bearer ${token}` } })).json();
 check((await read(b, "Before 2.md")) === null, "the note deleted after the snapshot stays deleted");
 check(listing.files.filter((f: { blobId: string | null }) => f.blobId).length === 5, "the server lists the five remaining notes");
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
