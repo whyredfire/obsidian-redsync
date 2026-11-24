@@ -84,7 +84,7 @@ export class SyncEngine {
     private storageFullSaid = false;
     /** The server speaks another protocol version: stopped until one of them is updated. */
     private unsupported = false;
-    /** Downloads started ahead of applying a batch of changes. */
+    /** Downloads started a few files ahead of the one being applied. */
     private prefetched = new Map<string, Promise<ArrayBuffer>>();
 
     constructor(
@@ -363,10 +363,7 @@ export class SyncEngine {
 
     private async applyChanges(changes: Change[]): Promise<void> {
         const todo = changes.filter((change) => change.seq > this.state.cursor.seq && change.deviceId !== this.account.deviceId);
-        // Start downloads ahead; most are needed, and a few extra are harmless.
-        void inParallel(todo, PARALLEL_UPLOADS, async (change) => {
-            if (change.blobId) await this.download(change.blobId).catch(() => undefined);
-        });
+        let next = 0;
         let applied = this.state.cursor.seq;
         try {
             for (const change of changes) {
@@ -376,7 +373,12 @@ export class SyncEngine {
                     this.socket.restart();
                     return;
                 }
-                if (change.deviceId !== this.account.deviceId) await this.applyChange(change);
+                if (change.deviceId !== this.account.deviceId) {
+                    this.prefetch(todo.slice(next, next + PARALLEL_UPLOADS).map((c) => c.blobId));
+                    next++;
+                    await this.applyChange(change);
+                    if (change.blobId) this.prefetched.delete(change.blobId);
+                }
                 applied = change.seq;
             }
         } catch (error) {
@@ -530,8 +532,16 @@ export class SyncEngine {
         const listing = await this.server.listing();
         const seen = new Set<string>();
         const deletedHere: [string, FileEntry][] = [];
-        for (const file of listing.files) {
-            const path = await this.pathOf(file.meta);
+        const paths = await Promise.all(listing.files.map((file) => this.pathOf(file.meta)));
+        // Files missing here (all of them on a new device) are downloaded a few ahead, as when catching up.
+        const missing = listing.files.filter((file, i) => file.blobId !== null && !isFolder(paths[i]) && !this.exists(paths[i]));
+        let next = 0;
+        for (const [i, file] of listing.files.entries()) {
+            const path = paths[i];
+            if (file === missing[next]) {
+                this.prefetch(missing.slice(next, next + PARALLEL_UPLOADS).map((f) => f.blobId));
+                next++;
+            }
             seen.add(path);
             const entry = this.state.get(path);
             const local = await this.readLocal(path);
@@ -570,6 +580,7 @@ export class SyncEngine {
         for (const path of [...this.state.files.keys()]) {
             if (!seen.has(path) && !this.exists(path)) await this.state.remove(path);
         }
+        this.prefetched.clear();
         this.epoch = listing.epoch;
         await this.state.setCursor({ epoch: listing.epoch, seq: listing.headSeq });
         // Reconnect from the listing's position, so changes made meanwhile arrive in order.
@@ -603,15 +614,25 @@ export class SyncEngine {
         }
     }
 
+    /** A file's content, from a download started ahead when there is one. */
     private download(blobId: string): Promise<ArrayBuffer> {
-        let pending = this.prefetched.get(blobId);
-        if (!pending) {
-            pending = (async () => this.codec.decodeBlob(await this.server.getBlob(blobId)))();
+        const ahead = this.prefetched.get(blobId);
+        this.prefetched.delete(blobId);
+        return ahead ?? this.fetchBlob(blobId);
+    }
+
+    /** Starts downloading the files applied next, so a few download while one is written. */
+    private prefetch(blobIds: (string | null)[]): void {
+        for (const blobId of blobIds) {
+            if (!blobId || this.prefetched.has(blobId)) continue;
+            const pending = this.fetchBlob(blobId);
+            pending.catch(() => undefined);
             this.prefetched.set(blobId, pending);
-            // Only kept while a batch of changes is applied.
-            if (this.prefetched.size > 1000) this.prefetched.clear();
         }
-        return pending;
+    }
+
+    private async fetchBlob(blobId: string): Promise<ArrayBuffer> {
+        return this.codec.decodeBlob(await this.server.getBlob(blobId));
     }
 
     /**
