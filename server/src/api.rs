@@ -34,7 +34,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/vaults/{vault}/devices/{device}", patch(rename_device).delete(revoke_device))
         .route(
             "/v1/vaults/{vault}/blobs/{blob}",
-            put(put_blob).get(get_blob).head(head_blob).layer(DefaultBodyLimit::disable()),
+            put(put_blob).get(get_blob).layer(DefaultBodyLimit::disable()),
         )
         .route("/v1/vaults/{vault}/files", get(list_files))
         .route("/v1/vaults/{vault}/versions", get(file_versions))
@@ -404,11 +404,6 @@ async fn put_blob(
     stored?;
     state.upload.notify_one();
     Ok((StatusCode::CREATED, Json(json!({ "stored": true }))))
-}
-
-async fn head_blob(State(state): State<AppState>, auth: Auth, Path((vault, blob)): Path<(String, String)>) -> ApiResult<StatusCode> {
-    auth.check(&vault)?;
-    if valid_blob_id(&blob) && blobs::exists(&state, &vault, &blob).await? { Ok(StatusCode::OK) } else { Err(ApiError::NotFound) }
 }
 
 async fn get_blob(State(state): State<AppState>, auth: Auth, Path((vault, blob)): Path<(String, String)>) -> ApiResult<Response> {
