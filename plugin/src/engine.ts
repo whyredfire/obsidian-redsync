@@ -274,7 +274,7 @@ export class SyncEngine {
                 this.waiting.add(file.path);
             }
         }
-        for (const folder of this.app.vault.getAllFolders()) if (!this.state.get(`${folder.path}/`)) this.waiting.add(`${folder.path}/`);
+        for (const folder of this.app.vault.getAllFolders()) if (!this.state.get(`${folder.path}/`)?.blobId) this.waiting.add(`${folder.path}/`);
         const missing = [...this.state.files].filter(([path, entry]) => entry.blobId !== null && !this.exists(path));
         if (this.massDeletion(missing.length)) {
             this.hooks.notice(
